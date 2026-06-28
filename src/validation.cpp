@@ -2293,6 +2293,25 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
  *  can fail if those validity checks fail (among other reasons). */
+// Mortal Ledger: OP_SOURCE succession. When the active novel is exhausted, the
+// block that mines the seam registers the successor novel in its coinbase scriptSig,
+// tagged "MLSR" (Mortal Ledger Source Registration) followed by the novel's bytes.
+// (Demo encoding; the full work registers the successor via an OP_SOURCE output.)
+// Returns the registered bytes, or empty if none.
+static std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block)
+{
+    static const unsigned char TAG[4] = {'M','L','S','R'};
+    if (block.vtx.empty() || block.vtx[0]->vin.empty()) return {};
+    const CScript& s = block.vtx[0]->vin[0].scriptSig;
+    if (s.size() < sizeof(TAG)) return {};
+    for (size_t i = 0; i + sizeof(TAG) <= s.size(); i++) {
+        bool match = true;
+        for (size_t j = 0; j < sizeof(TAG); j++) if (s[i + j] != TAG[j]) { match = false; break; }
+        if (match) return std::vector<unsigned char>(s.begin() + i + sizeof(TAG), s.end());
+    }
+    return {};
+}
+
 bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, CBlockIndex* pindex,
                                CCoinsViewCache& view, bool fJustCheck)
 {
@@ -2341,6 +2360,20 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         if (!fJustCheck)
             view.SetBestBlock(pindex->GetBlockHash());
         return true;
+    }
+
+    // Mortal Ledger: Proof of Quotation with OP_SOURCE succession. On real
+    // connection (not the unmined template, fJustCheck), the block hash must carry
+    // the next slice of the novel in its head bytes. If the active novel is
+    // exhausted, the block must register a successor in its coinbase; the slice is
+    // then read from that successor (succession), else no valid block exists
+    // (completion = death). The canon is advanced at the end on success.
+    if (!fJustCheck) {
+        const std::vector<unsigned char> reg = ExtractCanonRegistration(block);
+        const std::vector<unsigned char> slice = CanonExpectedSlice(reg);
+        if (!HashCarriesSlice(block_hash, slice)) {
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-quotation", "block hash does not transcribe the novel");
+        }
     }
 
     const char* script_check_reason;
@@ -2669,6 +2702,10 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         nSigOpsCost,
         Ticks<std::chrono::nanoseconds>(time_5 - time_start)
     );
+
+    // Mortal Ledger: the block is fully connected; advance the canon by K bytes,
+    // installing the registered successor at the seam where the active novel ends.
+    CanonAdvance(ExtractCanonRegistration(block));
 
     return true;
 }
@@ -4113,7 +4150,7 @@ arith_uint256 CalculateClaimedHeadersWork(std::span<const CBlockHeader> headers)
  *  v0.12 and v0.15 (when no additional protection was in place) whereby an attacker could unboundedly
  *  grow our in-memory block index. See https://bitcoincore.org/en/2024/07/03/disclose-header-spam.
  */
-static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, BlockManager& blockman, const ChainstateManager& chainman, const CBlockIndex* pindexPrev, bool fCheckPOW = true) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, BlockManager& blockman, const ChainstateManager& chainman, const CBlockIndex* pindexPrev) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     AssertLockHeld(::cs_main);
     assert(pindexPrev != nullptr);
@@ -4124,13 +4161,10 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
     if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams))
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-diffbits", "incorrect proof of work");
 
-    // Mortal Ledger: Proof of Quotation. The block hash must carry the next byte
-    // of the novel being transcribed at this height. Gated by fCheckPOW (like the
-    // proof-of-work hash check) so the unmined block template is exempt; the grind
-    // then satisfies it, and real blocks are enforced. The chain's head bytes, in
-    // order, reproduce the novel.
-    if (fCheckPOW && !CheckQuotation(block.GetHash(), nHeight))
-        return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-quotation", "block hash does not transcribe the novel");
+    // Mortal Ledger: Proof of Quotation is enforced in ConnectBlock, not here. The
+    // quotation slice can depend on a successor novel registered in the coinbase
+    // (OP_SOURCE succession), which a header-only check cannot read. ConnectBlock
+    // has the full block and the canon state, so the check lives there.
 
     // Check timestamp against prev
     if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast())
@@ -4546,7 +4580,7 @@ BlockValidationState TestBlockValidity(
      * - do run ContextualCheckBlock()
      */
 
-    if (!ContextualCheckBlockHeader(block, state, chainstate.m_blockman, chainstate.m_chainman, tip, check_pow)) {
+    if (!ContextualCheckBlockHeader(block, state, chainstate.m_blockman, chainstate.m_chainman, tip)) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
     }

@@ -12,6 +12,7 @@
 #include <util/check.h>
 
 #include <string>
+#include <vector>
 
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)
 {
@@ -179,31 +180,49 @@ bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Par
 // chain's head bytes, read in order, reproduce the novel exactly. (Demo: a fixed
 // opening with k=1 byte/block; the full version reads the offset from canon
 // state and carves k bytes.)
-bool CheckQuotation(const uint256& hash, int nHeight)
+// ---- Mortal Ledger canon state + OP_SOURCE succession ----
+// Demo-grade: process-global, advanced on real block connection. Not reorg- or
+// reindex-safe (a production node would track this per-block-index / in the
+// chainstate and recompute on restart). Sufficient for the regtest demo of
+// succession on a single linear chain.
+static const int CANON_K = 1; // writing granularity (demo; calibrated on the Pi)
+static std::string g_canon = "旅への誘いが、次第に私の空想から消えて行つた。"; // genesis canon (萩原朔太郎『猫町』)
+static size_t g_canon_off = 0;
+
+// The K bytes the next block must carry. If the active novel is exhausted, the
+// block must register a successor (reg = the registered novel bytes); with no
+// registration the result is empty, meaning no valid block can be made (the
+// chain starves at completion).
+std::vector<unsigned char> CanonExpectedSlice(const std::vector<unsigned char>& reg)
 {
-    if (nHeight < 1) return true; // genesis and below transcribe nothing
-    // The canon being transcribed. The opening of 萩原朔太郎『猫町』(UTF-8; the
-    // source file is UTF-8, so the compiler encodes the bytes). In the full node
-    // this comes from the OP_SOURCE-registered canon; here it is fixed.
-    static const std::string NOVEL = "旅への誘いが、次第に私の空想から消えて行つた。";
-    static const int K = 1; // writing granularity (demo; calibrated on the Pi)
-
-    // Canon state: the transcription offset is the chain's progress. Each block
-    // carves K bytes, so by height h we have written (h-1)*K bytes.
-    const size_t offset = (size_t)(nHeight - 1) * (size_t)K;
-
-    // Completion = death. When the novel is fully transcribed, no further block
-    // can satisfy the quotation, so the chain starves and halts (until a
-    // successor is registered, which OP_SOURCE will do). The act of writing the
-    // last byte is the last act the chain can perform.
-    if (offset >= NOVEL.size()) return false;
-
-    // The block hash must carry the novel's next K bytes in its head. (We
-    // constrain the low internal bytes; the proof-of-work magnitude lives in the
-    // high bytes, so the two predicates are orthogonal.)
-    const size_t n = std::min((size_t)K, NOVEL.size() - offset);
-    for (size_t i = 0; i < n; i++) {
-        if ((unsigned char)hash.begin()[i] != (unsigned char)NOVEL[offset + i]) return false;
+    std::string novel = g_canon;
+    size_t off = g_canon_off;
+    if (off >= novel.size()) {
+        if (reg.empty()) return {};
+        novel.assign(reg.begin(), reg.end());
+        off = 0;
     }
+    const size_t n = std::min((size_t)CANON_K, novel.size() - off);
+    return std::vector<unsigned char>(novel.begin() + off, novel.begin() + off + n);
+}
+
+// Advance the canon after a block is accepted (real connection only).
+void CanonAdvance(const std::vector<unsigned char>& reg)
+{
+    if (g_canon_off >= g_canon.size() && !reg.empty()) {
+        g_canon.assign(reg.begin(), reg.end());
+        g_canon_off = 0;
+    }
+    g_canon_off += CANON_K;
+}
+
+// Does the hash carry the expected slice in its head bytes? (We constrain the
+// low internal bytes; the proof-of-work magnitude lives in the high bytes, so
+// the two predicates are orthogonal.) Empty slice => no valid block.
+bool HashCarriesSlice(const uint256& hash, const std::vector<unsigned char>& slice)
+{
+    if (slice.empty()) return false;
+    for (size_t i = 0; i < slice.size(); i++)
+        if ((unsigned char)hash.begin()[i] != slice[i]) return false;
     return true;
 }

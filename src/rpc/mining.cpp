@@ -25,6 +25,7 @@
 #include <node/warnings.h>
 #include <policy/ephemeral_policy.h>
 #include <pow.h>
+#include <primitives/transaction.h>
 #include <rpc/blockchain.h>
 #include <rpc/mining.h>
 #include <rpc/server.h>
@@ -45,6 +46,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
 
 using interfaces::BlockRef;
 using interfaces::BlockTemplate;
@@ -137,13 +140,30 @@ static RPCHelpMan getnetworkhashps()
 static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t& max_tries, std::shared_ptr<const CBlock>& block_out, bool process_new_block)
 {
     block_out.reset();
+
+    // Mortal Ledger: Proof of Quotation with OP_SOURCE succession. This block must
+    // transcribe the next slice of the active novel. If the active novel is
+    // exhausted, the miner registers a successor (open choice) in the coinbase
+    // scriptSig (tag "MLSR" + the successor's bytes); transcription continues into
+    // it. Inject the registration before recomputing the merkle root, then grind
+    // until the hash satisfies BOTH the proof of work and the quotation slice.
+    std::vector<unsigned char> reg;
+    if (CanonExpectedSlice({}).empty()) {
+        // The active novel is fully transcribed. This miner names the successor.
+        static const std::string kSuccessor = "Call me Ishmael."; // Melville, Moby-Dick
+        reg.assign(kSuccessor.begin(), kSuccessor.end());
+        CMutableTransaction cb(*block.vtx[0]);
+        CScript& ss = cb.vin[0].scriptSig;
+        static const unsigned char TAG[4] = {'M','L','S','R'};
+        ss.insert(ss.end(), TAG, TAG + sizeof(TAG));
+        ss.insert(ss.end(), reg.begin(), reg.end());
+        block.vtx[0] = MakeTransactionRef(std::move(cb));
+    }
     block.hashMerkleRoot = BlockMerkleRoot(block);
 
-    // Mortal Ledger: this block transcribes the novel byte at the next height, so
-    // grind until the hash satisfies BOTH the proof of work and the quotation.
-    const int nHeight{WITH_LOCK(::cs_main, return chainman.ActiveChain().Height()) + 1};
+    const std::vector<unsigned char> slice = CanonExpectedSlice(reg);
 
-    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !(CheckProofOfWork(block.GetHash(), block.nBits, chainman.GetConsensus()) && CheckQuotation(block.GetHash(), nHeight)) && !chainman.m_interrupt) {
+    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !(CheckProofOfWork(block.GetHash(), block.nBits, chainman.GetConsensus()) && HashCarriesSlice(block.GetHash(), slice)) && !chainman.m_interrupt) {
         ++block.nNonce;
         --max_tries;
     }

@@ -9,6 +9,7 @@
 #include <consensus/params.h>
 
 #include <cstdint>
+#include <vector>
 
 class CBlockHeader;
 class CBlockIndex;
@@ -33,11 +34,26 @@ unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nF
 bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&);
 bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Params&);
 
-/** Mortal Ledger: Proof of Quotation. The block hash must carry the next byte of
- *  the novel being transcribed at this height (the head byte equals the novel's
- *  next byte). Concatenate the head bytes of the chain and the novel reappears.
- *  This is the quotation half; the pace half rides nBits/target as usual. */
-bool CheckQuotation(const uint256& hash, int nHeight);
+/** Mortal Ledger: Proof of Quotation with OP_SOURCE succession.
+ *
+ *  Canon state (current novel + transcription offset) lives in pow.cpp as
+ *  process-global state, advanced when a block is connected. The block hash must
+ *  carry the next slice of the novel in its head bytes; concatenate the head
+ *  bytes of the chain and the novel reappears. When the active novel is fully
+ *  transcribed, the block must register a successor (reg, carried in the coinbase)
+ *  and transcription continues into it. With no successor the chain starves
+ *  (completion = death).
+ *
+ *  - CanonExpectedSlice(reg): the K bytes the next block must carry, given the
+ *    successor registration reg (empty if none). Empty result => no valid block.
+ *  - CanonAdvance(reg): advance the canon after a block is accepted (real
+ *    connection only); installs the successor at the seam.
+ *  - HashCarriesSlice(hash, slice): does the hash carry the slice in its low
+ *    internal bytes? (PoW magnitude lives in the high bytes, so the two
+ *    predicates are orthogonal.) */
+std::vector<unsigned char> CanonExpectedSlice(const std::vector<unsigned char>& reg);
+void CanonAdvance(const std::vector<unsigned char>& reg);
+bool HashCarriesSlice(const uint256& hash, const std::vector<unsigned char>& slice);
 
 /**
  * Return false if the proof-of-work requirement specified by new_nbits at a
