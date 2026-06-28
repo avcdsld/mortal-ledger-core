@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -24,6 +25,14 @@ class CScript;
 class CScriptNum;
 class XOnlyPubKey;
 struct CScriptWitness;
+
+/** Mortal Ledger: execution context for the added primitives (OP_TTL, OP_SOURCELEFT,
+ *  OP_SNIPPET). A node sets these from the chainstate before evaluating a script;
+ *  the defaults (0 / empty) mean "unknown". Demo-grade process globals, consistent
+ *  with the canon state in pow.cpp. */
+extern int64_t g_mortal_ttl;          //!< the machine's remaining life
+extern int64_t g_mortal_source_left;  //!< the active novel's remaining bytes
+extern std::function<std::vector<unsigned char>(int64_t)> g_mortal_snippet; //!< height -> fragment
 
 /** Signature hash types/flags */
 enum

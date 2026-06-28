@@ -216,11 +216,22 @@ enum opcodetype
     // Core censored and, by its own hand, censors this one. See EvalScript.
     OP_PROMPT = 0xbb,
 
+    // Mortal Ledger: added primitives and LLM verbs (see LANGUAGE.md). The Core-
+    // disabled splice/bitwise/arithmetic opcodes above (OP_CAT .. OP_RSHIFT) are
+    // REVIVED in EvalScript (removed from the disabled list); only OP_PROMPT stays
+    // sealed. These additions name what Satoshi's register lacked:
+    OP_SNIPPET = 0xbc,     // push the transcribed canon fragment at a given height
+    OP_TTL = 0xbd,         // push the machine's remaining life (only falls)
+    OP_SOURCELEFT = 0xbe,  // push the active novel's remaining bytes
+    OP_DREAM = 0xbf,       // LLM (model C): dream from the words on the stack
+    OP_JUDGE = 0xc0,       // LLM (model C): read a fragment, return a 1-bit verdict
+    OP_TRANSLATE = 0xc1,   // LLM (model C): move the input into another tongue
+
     OP_INVALIDOPCODE = 0xff,
 };
 
 // Maximum value that an opcode can be
-static const unsigned int MAX_OPCODE = OP_NOP10;
+static const unsigned int MAX_OPCODE = OP_TRANSLATE;
 
 std::string GetOpName(opcodetype opcode);
 

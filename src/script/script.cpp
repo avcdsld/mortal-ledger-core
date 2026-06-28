@@ -152,6 +152,14 @@ std::string GetOpName(opcodetype opcode)
     // Mortal Ledger: the sealed creation opcode
     case OP_PROMPT                 : return "OP_PROMPT";
 
+    // Mortal Ledger: added primitives and LLM verbs
+    case OP_SNIPPET                : return "OP_SNIPPET";
+    case OP_TTL                    : return "OP_TTL";
+    case OP_SOURCELEFT             : return "OP_SOURCELEFT";
+    case OP_DREAM                  : return "OP_DREAM";
+    case OP_JUDGE                  : return "OP_JUDGE";
+    case OP_TRANSLATE              : return "OP_TRANSLATE";
+
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 
     default:

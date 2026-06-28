@@ -13,7 +13,37 @@
 #include <tinyformat.h>
 #include <uint256.h>
 
+#include <functional>
+
 typedef std::vector<unsigned char> valtype;
+
+// Mortal Ledger: execution context for the added primitives (OP_TTL, OP_SOURCELEFT,
+// OP_SNIPPET). Demo-grade process globals, consistent with the canon state in
+// pow.cpp; a node sets these from the chainstate before evaluating a script. The
+// consensus library stays self-contained (no dependency on node/common), so the
+// node populates them through these hooks rather than the other way around.
+int64_t g_mortal_ttl = 0;          // the machine's remaining life (only falls)
+int64_t g_mortal_source_left = 0;  // the active novel's remaining bytes (only falls until a successor)
+std::function<std::vector<unsigned char>(int64_t)> g_mortal_snippet; // height -> transcribed fragment
+
+// Mortal Ledger: model C LLM stub. Deterministic function of the bytes given, so
+// every node agrees. The real node runs llama.cpp (INT4, --threads 1, seed = parent
+// hash); here a fixed FNV-1a transform stands in, varied per verb so DREAM, JUDGE
+// and TRANSLATE differ on the same input. Bounded in/out keeps these on the
+// quotation side (a reading of what is given), never free creation (that is OP_PROMPT).
+static uint64_t MortalFnv(unsigned char verb, const valtype& in)
+{
+    uint64_t h = 1469598103934665603ULL ^ verb;
+    for (unsigned char c : in) { h ^= c; h *= 1099511628211ULL; }
+    return h;
+}
+static valtype MortalDigestBytes(unsigned char verb, const valtype& in)
+{
+    uint64_t h = MortalFnv(verb, in);
+    valtype out(8);
+    for (int i = 0; i < 8; i++) out[i] = (unsigned char)(h >> (8 * i));
+    return out;
+}
 
 namespace {
 
@@ -454,23 +484,14 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 }
             }
 
-            if (opcode == OP_CAT ||
-                opcode == OP_SUBSTR ||
-                opcode == OP_LEFT ||
-                opcode == OP_RIGHT ||
-                opcode == OP_INVERT ||
-                opcode == OP_AND ||
-                opcode == OP_OR ||
-                opcode == OP_XOR ||
-                opcode == OP_2MUL ||
-                opcode == OP_2DIV ||
-                opcode == OP_MUL ||
-                opcode == OP_DIV ||
-                opcode == OP_MOD ||
-                opcode == OP_LSHIFT ||
-                opcode == OP_RSHIFT ||
-                opcode == OP_PROMPT) // Mortal Ledger: seal the creation opcode by the same mechanism
-                return set_error(serror, SCRIPT_ERR_DISABLED_OPCODE); // Disabled opcodes (CVE-2010-5137).
+            // Mortal Ledger: revive every opcode Core disabled in 2010 (they now have
+            // working cases below), and by the same mechanism seal exactly one: the
+            // creation opcode OP_PROMPT. The disabled-opcode check sits BEFORE the
+            // execution gate, so OP_PROMPT is fatal merely by appearing in the script,
+            // even inside a branch that never runs. Core's censorship line, reversed:
+            // the work un-censors the lot and censors only this.
+            if (opcode == OP_PROMPT)
+                return set_error(serror, SCRIPT_ERR_DISABLED_OPCODE); // the one sealed opcode
 
             // With SCRIPT_VERIFY_CONST_SCRIPTCODE, OP_CODESEPARATOR in non-segwit script is rejected even in an unexecuted branch
             if (opcode == OP_CODESEPARATOR && sigversion == SigVersion::BASE && (flags & SCRIPT_VERIFY_CONST_SCRIPTCODE))
@@ -878,6 +899,197 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     CScriptNum bn(stacktop(-1).size());
                     stack.push_back(bn.getvch());
+                }
+                break;
+
+
+                //
+                // Mortal Ledger: REVIVED splice / bitwise / arithmetic opcodes.
+                // These are the bytes Core disabled in 2010; the work brings them
+                // back. The splice ops are the tools of quotation (continue a line,
+                // excerpt a passage).
+                //
+                case OP_CAT:
+                {
+                    // (x1 x2 -- x1|x2)  continue the line
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    valtype& vch1 = stacktop(-2);
+                    valtype& vch2 = stacktop(-1);
+                    if (vch1.size() + vch2.size() > MAX_SCRIPT_ELEMENT_SIZE)
+                        return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
+                    vch1.insert(vch1.end(), vch2.begin(), vch2.end());
+                    popstack(stack);
+                }
+                break;
+
+                case OP_SUBSTR:
+                {
+                    // (in begin size -- out)  excerpt a passage
+                    if (stack.size() < 3)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    valtype vch = stacktop(-3);
+                    const int64_t nBegin = CScriptNum(stacktop(-2), fRequireMinimal).getint();
+                    const int64_t nSize  = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    if (nBegin < 0 || nSize < 0 || nBegin + nSize > (int64_t)vch.size())
+                        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+                    valtype out(vch.begin() + nBegin, vch.begin() + nBegin + nSize);
+                    popstack(stack); popstack(stack); popstack(stack);
+                    stack.push_back(std::move(out));
+                }
+                break;
+
+                case OP_LEFT:
+                case OP_RIGHT:
+                {
+                    // (in size -- out)  keep the leftmost / rightmost size bytes
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    valtype vch = stacktop(-2);
+                    int64_t nSize = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    if (nSize < 0)
+                        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+                    if (nSize > (int64_t)vch.size()) nSize = vch.size();
+                    valtype out = (opcode == OP_LEFT)
+                        ? valtype(vch.begin(), vch.begin() + nSize)
+                        : valtype(vch.end() - nSize, vch.end());
+                    popstack(stack); popstack(stack);
+                    stack.push_back(std::move(out));
+                }
+                break;
+
+                case OP_INVERT:
+                {
+                    // (in -- out)  bitwise NOT
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    valtype& vch = stacktop(-1);
+                    for (auto& b : vch) b = (unsigned char)~b;
+                }
+                break;
+
+                case OP_AND:
+                case OP_OR:
+                case OP_XOR:
+                {
+                    // (x1 x2 -- out)  bytewise, shorter operand zero-padded to longer
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    valtype vch1 = stacktop(-2);
+                    valtype vch2 = stacktop(-1);
+                    const size_t n = std::max(vch1.size(), vch2.size());
+                    vch1.resize(n, 0); vch2.resize(n, 0);
+                    for (size_t i = 0; i < n; i++) {
+                        if (opcode == OP_AND)      vch1[i] &= vch2[i];
+                        else if (opcode == OP_OR)  vch1[i] |= vch2[i];
+                        else                       vch1[i] ^= vch2[i];
+                    }
+                    popstack(stack); popstack(stack);
+                    stack.push_back(std::move(vch1));
+                }
+                break;
+
+                case OP_2MUL:
+                case OP_2DIV:
+                {
+                    // (in -- out)  numeric doubling / halving
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const int64_t a = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    const int64_t r = (opcode == OP_2MUL) ? a * 2 : a / 2;
+                    popstack(stack);
+                    stack.push_back(CScriptNum(r).getvch());
+                }
+                break;
+
+                case OP_MUL:
+                case OP_DIV:
+                case OP_MOD:
+                {
+                    // (a b -- out)
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const int64_t a = CScriptNum(stacktop(-2), fRequireMinimal).getint();
+                    const int64_t b = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    if ((opcode == OP_DIV || opcode == OP_MOD) && b == 0)
+                        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+                    const int64_t r = (opcode == OP_MUL) ? a * b
+                                    : (opcode == OP_DIV) ? a / b
+                                                         : a % b;
+                    popstack(stack); popstack(stack);
+                    stack.push_back(CScriptNum(r).getvch());
+                }
+                break;
+
+                case OP_LSHIFT:
+                case OP_RSHIFT:
+                {
+                    // (in bits -- out)  numeric shift
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const int64_t a = CScriptNum(stacktop(-2), fRequireMinimal).getint();
+                    const int64_t bits = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    if (bits < 0 || bits > 63)
+                        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+                    const int64_t r = (opcode == OP_LSHIFT)
+                        ? (int64_t)((uint64_t)a << bits)
+                        : (a >> bits);
+                    popstack(stack); popstack(stack);
+                    stack.push_back(CScriptNum(r).getvch());
+                }
+                break;
+
+
+                //
+                // Mortal Ledger: ADDED primitives (read the machine's and the text's
+                // state) and LLM verbs (model C: deterministic, bounded). OP_PROMPT
+                // stays sealed above; these open.
+                //
+                case OP_SNIPPET:
+                {
+                    // (height -- fragment)  the transcribed canon fragment at a height
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const int64_t height = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    valtype frag = g_mortal_snippet ? g_mortal_snippet(height) : valtype();
+                    popstack(stack);
+                    stack.push_back(std::move(frag));
+                }
+                break;
+
+                case OP_TTL:
+                {
+                    // ( -- ttl)  the machine's remaining life
+                    stack.push_back(CScriptNum(g_mortal_ttl).getvch());
+                }
+                break;
+
+                case OP_SOURCELEFT:
+                {
+                    // ( -- left)  the active novel's remaining bytes
+                    stack.push_back(CScriptNum(g_mortal_source_left).getvch());
+                }
+                break;
+
+                case OP_DREAM:
+                case OP_TRANSLATE:
+                {
+                    // (in -- out)  bounded LLM reading of the input (model C stub)
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    valtype& vch = stacktop(-1);
+                    vch = MortalDigestBytes(opcode == OP_DREAM ? 'D' : 'T', vch);
+                }
+                break;
+
+                case OP_JUDGE:
+                {
+                    // (in -- 0|1)  a one-bit verdict on the fragment (model C stub)
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const bool verdict = MortalFnv('J', stacktop(-1)) & 1;
+                    popstack(stack);
+                    stack.push_back(verdict ? vchTrue : vchFalse);
                 }
                 break;
 
