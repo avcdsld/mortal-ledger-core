@@ -161,8 +161,7 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t&
         ? CanonExpectedSlice(canon_in, canon_novel, ExtractCanonRegistration(block))
         : std::vector<unsigned char>{};
     auto pace_ok = [&](const uint256& h) {
-        return consensus.fMortalLedgerLWMA ? CheckPaceTarget(h, block.nBits, consensus)
-                                           : CheckProofOfWork(h, block.nBits, consensus);
+        return CheckPaceTarget(h, block.nBits, consensus); // pace half (k zeroed); matches CheckBlockHeader
     };
     auto quote_ok = [&](const uint256& h) {
         return !canon_in.active() || HashCarriesSlice(h, slice); // pre-fork: no quotation

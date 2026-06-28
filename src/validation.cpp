@@ -41,6 +41,7 @@
 #include <primitives/transaction.h>
 #include <random.h>
 #include <script/script.h>
+#include <script/interpreter.h>
 #include <script/sigcache.h>
 #include <signet.h>
 #include <tinyformat.h>
@@ -2374,6 +2375,13 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     const std::vector<unsigned char> canon_reg = ExtractCanonRegistration(block);
     const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, pindex, params.GetConsensus(), m_blockman);
 
+    // Mortal Ledger: fire replay protection at the same height H. Once active, the
+    // signature hash folds in MORTAL_FORKID (patch 0009), so a Bitcoin signature is
+    // invalid here and vice versa. Demo-grade process global (set per connected block,
+    // same style as g_mortal_block_seed); the mempool/relay path (ATMP) firing is a
+    // follow-up. Pre-fork (height < H) this stays false = inherited Bitcoin sighash.
+    g_mortal_forkid = params.GetConsensus().IsMortalLedgerActive(pindex->nHeight);
+
     // On real connection (not the unmined template, fJustCheck), the block hash must
     // carry the next slice of the active novel in its head bytes. At a seam the slice is
     // read from the successor the block registers in its coinbase (succession), else no
@@ -3922,12 +3930,14 @@ void ChainstateManager::ReceivedBlockTransactions(const CBlock& block, CBlockInd
 
 static bool CheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
-    // Check proof of work matches claimed amount. Mortal Ledger: after the fork the
-    // pace half zeroes the quotation bytes before the magnitude check (orthogonal to
-    // the quotation half enforced in ConnectBlock). Pre-fork: inherited Bitcoin PoW.
-    const bool pow_ok = consensusParams.fMortalLedgerLWMA
-        ? CheckPaceTarget(block.GetHash(), block.nBits, consensusParams)
-        : CheckProofOfWork(block.GetHash(), block.nBits, consensusParams);
+    // Check proof of work matches claimed amount. Mortal Ledger: the pace half of Proof
+    // of Quotation zeroes the k quotation bytes before the magnitude check, so the
+    // quotation half (the low bytes carry the novel, enforced in ConnectBlock) and the
+    // pace half (magnitude vs target) are orthogonal. k is a consensus constant, so this
+    // header check needs no height; pre-fork it differs from plain PoW by at most
+    // 2^(8k)-1 out of the target (cryptographically negligible at any real difficulty).
+    // The difficulty itself (nBits) fires to LWMA at height H via GetNextWorkRequired.
+    const bool pow_ok = CheckPaceTarget(block.GetHash(), block.nBits, consensusParams);
     if (fCheckPOW && !pow_ok)
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "high-hash", "proof of work failed");
 

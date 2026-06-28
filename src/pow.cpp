@@ -27,9 +27,12 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
     assert(pindexLast != nullptr);
     unsigned int nProofOfWorkLimit = UintToArith256(params.powLimit).GetCompact();
 
-    // Mortal Ledger: after the fork, retarget every block by LWMA. Before there is a
-    // full window of post-fork history, hold the (reset) target.
-    if (params.fMortalLedgerLWMA && pindexLast->nHeight >= MORTAL_LEDGER_LWMA_N) {
+    // Mortal Ledger: at and after the fork height H, retarget every block by LWMA (the
+    // firing point is Consensus nMortalLedgerHeight). Hold the (reset) target until a
+    // full window of POST-FORK history exists, so the LWMA window is never fed pre-fork
+    // (inherited Bitcoin) block spacing across the seam.
+    if (params.IsMortalLedgerActive(pindexLast->nHeight + 1) &&
+        pindexLast->nHeight - params.nMortalLedgerHeight >= MORTAL_LEDGER_LWMA_N) {
         return GetNextWorkRequiredLWMA(pindexLast, params);
     }
 

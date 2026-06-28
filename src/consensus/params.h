@@ -118,22 +118,13 @@ struct Params {
     bool enforce_BIP94;
     bool fPowNoRetargeting;
     /**
-     * Mortal Ledger: when true, difficulty retargets every block by LWMA (Zawy's
-     * linearly weighted moving average) instead of Bitcoin's 2016-block window, and
-     * the proof-of-work magnitude is checked with the quotation bytes zeroed (the
-     * pace half of Proof of Quotation). The fork flips this on at height H, after
-     * resetting the target to Raspberry-Pi scale. Default false = inherited Bitcoin
-     * rules, so pre-fork history and other networks are untouched.
-     */
-    bool fMortalLedgerLWMA{false};
-    /**
-     * Mortal Ledger: the fork-activation height H. At and after this height the Mortal
-     * Ledger consensus rules fire: Proof of Quotation (the block hash must transcribe
-     * the canon), 写字本位 issuance (the coinbase mints the bytes written), and the
-     * per-block canon state carried on the block index. Below H the chain is inherited
-     * Bitcoin and carries no canon. -1 = never (the rules stay dormant). This is the
-     * single firing point; fMortalLedgerLWMA (the LWMA retarget / pace) and the replay
-     * id are meant to flip on in lockstep with H.
+     * Mortal Ledger: the fork-activation height H — the single firing point for every
+     * Mortal Ledger consensus rule. At and after H: Proof of Quotation (the block hash
+     * transcribes the canon), 写字本位 issuance (the coinbase mints the bytes written),
+     * the per-block canon state on the index, the LWMA per-block retarget (Zawy's
+     * linearly weighted moving average, replacing Bitcoin's 2016-block window once a
+     * full post-fork window exists), and the replay-protection fork id (MORTAL_FORKID).
+     * Below H the chain is inherited Bitcoin and untouched. -1 = never (dormant).
      */
     int nMortalLedgerHeight{-1};
     bool IsMortalLedgerActive(int height) const { return nMortalLedgerHeight >= 0 && height >= nMortalLedgerHeight; }
