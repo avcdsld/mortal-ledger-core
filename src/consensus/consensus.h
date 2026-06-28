@@ -9,8 +9,13 @@
 #include <cstdint>
 #include <cstdlib>
 
-/** The maximum allowed size for a serialized block, in bytes (only for buffer size limits) */
-static const unsigned int MAX_BLOCK_SERIALIZED_SIZE = 4000000;
+/** Mortal Ledger: the largest single canon novel an OP_SOURCE registration may carry. A
+ *  seam block is granted a weight/size exemption of up to this many bytes so it can carry a
+ *  whole new novel in one block; larger texts must be split across successive seams. */
+static const unsigned int MAX_NOVEL_BYTES = 4000000;
+/** The maximum allowed size for a serialized block, in bytes (network/disk rule). Raised by
+ *  MAX_NOVEL_BYTES so a seam block carrying a novel fits on the wire and on disk. */
+static const unsigned int MAX_BLOCK_SERIALIZED_SIZE = 4000000 + MAX_NOVEL_BYTES;
 /** The maximum allowed weight for a block, see BIP 141 (network rule) */
 static const unsigned int MAX_BLOCK_WEIGHT = 4000000;
 /** The maximum allowed number of signature check operations in a block (network rule) */

@@ -5,8 +5,12 @@
 #include <consensus/tx_check.h>
 
 #include <consensus/amount.h>
+#include <consensus/consensus.h>
 #include <primitives/transaction.h>
 #include <consensus/validation.h>
+#include <script/script.h>
+
+#include <algorithm>
 
 bool CheckTransaction(const CTransaction& tx, TxValidationState& state)
 {
@@ -15,8 +19,25 @@ bool CheckTransaction(const CTransaction& tx, TxValidationState& state)
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-vin-empty");
     if (tx.vout.empty())
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-vout-empty");
+    // Mortal Ledger: a coinbase may carry a registered novel in an unspendable OP_SOURCE
+    // output (scriptPubKey = OP_SOURCE <novel>, up to MAX_NOVEL_BYTES). Those bytes are exempt
+    // from the per-transaction size limit, matching the seam block's size/weight exemption.
+    uint64_t canon_exempt = 0;
+    if (tx.IsCoinBase()) {
+        for (const auto& txout : tx.vout) {
+            const CScript& s = txout.scriptPubKey;
+            if (s.empty() || s[0] != OP_SOURCE) continue;
+            CScript::const_iterator pc = s.begin();
+            opcodetype op;
+            std::vector<unsigned char> data;
+            if (!s.GetOp(pc, op, data)) continue;            // OP_SOURCE
+            data.clear();
+            if (s.GetOp(pc, op, data)) canon_exempt += data.size(); // the pushed novel
+        }
+        canon_exempt = std::min<uint64_t>(canon_exempt, MAX_NOVEL_BYTES);
+    }
     // Size limits (this doesn't take the witness into account, as that hasn't been checked for malleability)
-    if (::GetSerializeSize(TX_NO_WITNESS(tx)) * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT) {
+    if ((uint64_t)::GetSerializeSize(TX_NO_WITNESS(tx)) * WITNESS_SCALE_FACTOR > (uint64_t)MAX_BLOCK_WEIGHT + canon_exempt * WITNESS_SCALE_FACTOR) {
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-oversize");
     }
 

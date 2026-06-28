@@ -227,12 +227,13 @@ enum opcodetype
     OP_JUDGE = 0xc0,       // LLM (model C): read a fragment, return a 1-bit verdict
     OP_TRANSLATE = 0xc1,   // LLM (model C): move the input into another tongue
     OP_MNEMONIC = 0xc2,    // BIP39: turn an entropy byte string into a mnemonic phrase (chosen language)
+    OP_SOURCE = 0xc3,      // marks an unspendable coinbase output carrying a registered successor novel
 
     OP_INVALIDOPCODE = 0xff,
 };
 
 // Maximum value that an opcode can be
-static const unsigned int MAX_OPCODE = OP_MNEMONIC;
+static const unsigned int MAX_OPCODE = OP_SOURCE;
 
 std::string GetOpName(opcodetype opcode);
 

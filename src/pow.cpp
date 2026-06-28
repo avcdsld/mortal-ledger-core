@@ -324,22 +324,36 @@ bool HashCarriesSlice(const uint256& hash, const std::vector<unsigned char>& sli
     return true;
 }
 
-// OP_SOURCE succession: a miner registers the successor novel in the coinbase
-// scriptSig, tagged "MLSR" (Mortal Ledger Source Registration) followed by the
-// novel's bytes. (Demo encoding; the full work registers via an OP_SOURCE output.)
-// Returns the registered bytes, or empty if none.
+// OP_SOURCE succession (production): the successor novel is carried in an unspendable
+// coinbase output whose scriptPubKey is `OP_SOURCE <novel>`. This lifts the coinbase
+// scriptSig 100-byte limit (the earlier demo encoding); the novel may be up to
+// MAX_NOVEL_BYTES and the seam block is granted a matching weight/size exemption. The
+// novel is a single push (so it is skipped by sig-op counting and never executed, the
+// output being unspendable). Returns each registration's bytes (normally 0 or 1; >1 is
+// rejected by block validation).
+std::vector<std::vector<unsigned char>> ExtractCanonRegistrations(const CBlock& block)
+{
+    std::vector<std::vector<unsigned char>> regs;
+    if (block.vtx.empty()) return regs;
+    for (const CTxOut& o : block.vtx[0]->vout) {
+        const CScript& s = o.scriptPubKey;
+        if (s.empty() || s[0] != OP_SOURCE) continue;
+        CScript::const_iterator pc = s.begin();
+        opcodetype op;
+        std::vector<unsigned char> data;
+        if (!s.GetOp(pc, op, data)) continue;            // consume OP_SOURCE
+        data.clear();
+        if (s.GetOp(pc, op, data)) regs.push_back(data); // the pushed novel
+        else regs.push_back({});
+    }
+    return regs;
+}
+
+// The single canon registration in this block (empty if none).
 std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block)
 {
-    static const unsigned char TAG[4] = {'M','L','S','R'};
-    if (block.vtx.empty() || block.vtx[0]->vin.empty()) return {};
-    const CScript& s = block.vtx[0]->vin[0].scriptSig;
-    if (s.size() < sizeof(TAG)) return {};
-    for (size_t i = 0; i + sizeof(TAG) <= s.size(); i++) {
-        bool match = true;
-        for (size_t j = 0; j < sizeof(TAG); j++) if (s[i + j] != TAG[j]) { match = false; break; }
-        if (match) return std::vector<unsigned char>(s.begin() + i + sizeof(TAG), s.end());
-    }
-    return {};
+    const auto regs = ExtractCanonRegistrations(block);
+    return regs.empty() ? std::vector<unsigned char>{} : regs.front();
 }
 
 // 写字本位 (transcription standard): the coinbase mints BAB equal to the bytes

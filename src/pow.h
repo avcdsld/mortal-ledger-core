@@ -94,6 +94,8 @@ bool HashCarriesSlice(const uint256& hash, const std::vector<unsigned char>& sli
 /** Mortal Ledger: the successor novel a block registers in its coinbase (empty if none),
  *  and the coinbase issuance = bytes transcribed this block × 1 BAB. */
 std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block);
+/** All canon registrations (OP_SOURCE outputs) in the block's coinbase (normally 0 or 1). */
+std::vector<std::vector<unsigned char>> ExtractCanonRegistrations(const CBlock& block);
 CAmount CanonIssuance(const CanonState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg);
 
 /**

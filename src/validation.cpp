@@ -2375,6 +2375,13 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     const std::vector<unsigned char> canon_reg = ExtractCanonRegistration(block);
     const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, pindex, params.GetConsensus(), m_blockman);
 
+    // Mortal Ledger: an OP_SOURCE registration is valid only at a seam (the active novel is
+    // exhausted). This both defines succession and rate-limits the over-sized seam block to
+    // once per novel — it cannot appear mid-novel or pre-fork (so the size exemption above
+    // cannot be abused outside a seam).
+    if (!canon_reg.empty() && !(canon_in.active() && CanonExpectedSlice(canon_in, canon_novel, {}).empty()))
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "op-source-not-at-seam", "OP_SOURCE registration outside a seam");
+
     // Mortal Ledger: fire replay protection at the same height H. Once active, the
     // signature hash folds in MORTAL_FORKID (patch 0009), so a Bitcoin signature is
     // invalid here and vice versa. Demo-grade process global (set per connected block,
@@ -4054,8 +4061,19 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     // Note that witness malleability is checked in ContextualCheckBlock, so no
     // checks that use witness data may be performed here.
 
+    // Mortal Ledger: the canon registration (OP_SOURCE output) is exempt from the block
+    // size/weight limits, capped at MAX_NOVEL_BYTES, so a seam block can carry a whole new
+    // novel. At most one registration per block; an oversize novel is rejected.
+    const std::vector<std::vector<unsigned char>> canon_regs = ExtractCanonRegistrations(block);
+    if (canon_regs.size() > 1)
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-canon-multi", "more than one OP_SOURCE registration");
+    if (!canon_regs.empty() && canon_regs[0].size() > MAX_NOVEL_BYTES)
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-canon-size", "OP_SOURCE novel exceeds MAX_NOVEL_BYTES");
+    const uint64_t canon_exempt = canon_regs.empty() ? 0 : (uint64_t)canon_regs[0].size();
+
     // Size limits
-    if (block.vtx.empty() || block.vtx.size() * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT || ::GetSerializeSize(TX_NO_WITNESS(block)) * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT)
+    if (block.vtx.empty() || block.vtx.size() * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT ||
+        (uint64_t)::GetSerializeSize(TX_NO_WITNESS(block)) * WITNESS_SCALE_FACTOR > (uint64_t)MAX_BLOCK_WEIGHT + canon_exempt * WITNESS_SCALE_FACTOR)
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-length", "size limits failed");
 
     // First transaction must be coinbase, the rest must not be
@@ -4292,7 +4310,15 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     // large by filling up the coinbase witness, which doesn't change
     // the block hash, so we couldn't mark the block as permanently
     // failed).
-    if (GetBlockWeight(block) > MAX_BLOCK_WEIGHT) {
+    // Mortal Ledger: raise the weight ceiling by the canon registration's bytes (the
+    // OP_SOURCE output, capped at MAX_NOVEL_BYTES), so a seam block carrying a whole novel
+    // is within limits. Non-seam blocks (no registration) keep the normal ceiling.
+    uint64_t canon_exempt = 0;
+    {
+        const auto regs = ExtractCanonRegistrations(block);
+        if (!regs.empty()) canon_exempt = std::min<uint64_t>(regs[0].size(), MAX_NOVEL_BYTES);
+    }
+    if ((uint64_t)GetBlockWeight(block) > (uint64_t)MAX_BLOCK_WEIGHT + canon_exempt * WITNESS_SCALE_FACTOR) {
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-weight", strprintf("%s : weight limit failed", __func__));
     }
 

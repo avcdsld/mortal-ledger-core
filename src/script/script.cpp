@@ -160,6 +160,7 @@ std::string GetOpName(opcodetype opcode)
     case OP_JUDGE                  : return "OP_JUDGE";
     case OP_TRANSLATE              : return "OP_TRANSLATE";
     case OP_MNEMONIC               : return "OP_MNEMONIC";
+    case OP_SOURCE                 : return "OP_SOURCE";
 
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 

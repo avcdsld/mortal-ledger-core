@@ -184,24 +184,26 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     // Add an output that spends the full coinbase reward.
     coinbaseTx.vout.resize(1);
     coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
-    // Mortal Ledger: OP_SOURCE succession + 写字本位 issuance. The canon state ENTERING
-    // this template's block is the tip's leaving state, folded by the fork-height rule;
-    // resolve the active novel's bytes from it. If the active novel is exhausted the
-    // miner names a successor and registers it (the slice and issuance then come from
-    // it); below the fork height there is no canon. The successor rides the coinbase
-    // scriptSig (tag "MLSR" + bytes); the coinbase mints exactly the bytes this block
-    // transcribes (CanonIssuance), so the seam block mints for the successor's first byte.
+    // Mortal Ledger: OP_SOURCE succession + 写字本位 issuance. At a seam (active novel
+    // exhausted) the miner names the successor (open choice, from its magazine) and registers
+    // it in an unspendable OP_SOURCE coinbase output. The coinbase mints exactly the bytes
+    // this block transcribes (CanonIssuance, given that registration).
+    // The canon state ENTERING this template's block is the tip's leaving state, folded by
+    // the fork-height rule (carrying the novel ordinal index, so the magazine advances across
+    // successive seams); resolve the active novel's bytes from it.
     const CanonState canon_in = CanonEnter(nHeight,
         CanonState{pindexPrev->m_canon_source_height, pindexPrev->m_canon_offset, pindexPrev->m_canon_index},
         chainparams.GetConsensus());
     const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, pindexPrev, chainparams.GetConsensus(), m_chainstate.m_blockman);
     std::vector<unsigned char> reg;
     if (canon_in.active() && CanonExpectedSlice(canon_in, canon_novel, {}).empty()) {
-        // The active novel is exhausted (a seam). Succession is OPEN; WHICH novel this
-        // node registers is local policy: the next entry from the successor magazine,
-        // selected by the novel ordinal (deterministic, reorg-safe). An empty/exhausted
-        // magazine means no registration -> the chain starves (completion = death).
+        // The active novel is exhausted (a seam). Succession is OPEN; WHICH novel this node
+        // registers is local policy: the next magazine entry, selected by the novel ordinal.
+        // Carry it in an unspendable OP_SOURCE coinbase output (production mechanism; lifts the
+        // 100-byte coinbase scriptSig limit, up to MAX_NOVEL_BYTES). Empty magazine -> no
+        // registration -> the chain starves (completion = death).
         reg = MortalNextSuccessor(canon_in.index);
+        if (!reg.empty()) coinbaseTx.vout.emplace_back(CAmount{0}, CScript() << OP_SOURCE << reg);
     }
     const CAmount block_reward{nFees + (canon_in.active()
         ? CanonIssuance(canon_in, canon_novel, reg)
@@ -220,11 +222,6 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         // bytes long (bad-cb-length), so tests and regtest include a dummy
         // extraNonce (OP_0)
         coinbaseTx.vin[0].scriptSig << OP_0;
-    }
-    if (!reg.empty()) {
-        static const unsigned char TAG[4] = {'M','L','S','R'};
-        coinbaseTx.vin[0].scriptSig.insert(coinbaseTx.vin[0].scriptSig.end(), TAG, TAG + sizeof(TAG));
-        coinbaseTx.vin[0].scriptSig.insert(coinbaseTx.vin[0].scriptSig.end(), reg.begin(), reg.end());
     }
     coinbase_tx.script_sig_prefix = coinbaseTx.vin[0].scriptSig;
     Assert(nHeight > 0);
