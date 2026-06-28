@@ -226,12 +226,13 @@ enum opcodetype
     OP_DREAM = 0xbf,       // LLM (model C): dream from the words on the stack
     OP_JUDGE = 0xc0,       // LLM (model C): read a fragment, return a 1-bit verdict
     OP_TRANSLATE = 0xc1,   // LLM (model C): move the input into another tongue
+    OP_MNEMONIC = 0xc2,    // BIP39: turn an entropy byte string into a mnemonic phrase (chosen language)
 
     OP_INVALIDOPCODE = 0xff,
 };
 
 // Maximum value that an opcode can be
-static const unsigned int MAX_OPCODE = OP_TRANSLATE;
+static const unsigned int MAX_OPCODE = OP_MNEMONIC;
 
 std::string GetOpName(opcodetype opcode);
 

@@ -8,6 +8,7 @@
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
+#include <script/bip39_wordlists.h>
 #include <pubkey.h>
 #include <script/script.h>
 #include <tinyformat.h>
@@ -78,6 +79,39 @@ static valtype MortalRunLLM(uint8_t verb, const valtype& in)
     seeded.insert(seeded.end(), g_mortal_block_seed.begin(), g_mortal_block_seed.end());
     seeded.insert(seeded.end(), in.begin(), in.end());
     return MortalDigestBytes(verb, seeded);
+}
+
+// Mortal Ledger: OP_MNEMONIC — encode an ARBITRARY byte string as mnemonic words using a
+// BIP39 wordlist (a deterministic "table lookup", NOT a checksummed BIP39 seed phrase).
+// The bytes are read as 11-bit groups (the wordlist holds 2048 = 2^11 words); a final
+// partial group is zero-padded on the right. Any non-empty input yields at least one word;
+// an empty input yields the empty phrase. Consensus-safe: the wordlists are byte-pinned
+// (src/script/bip39_wordlists.h). Intended to turn bytes into word tokens (e.g. to feed
+// OP_DREAM/OP_TRANSLATE). lang: 0 = English, 1 = Japanese (joined with U+3000). Returns
+// false only on an unknown language.
+static bool MortalMnemonic(const valtype& ent, int lang, valtype& out)
+{
+    const char* const* wl;
+    const char* sep;
+    switch (lang) {
+    case 0: wl = BIP39_WORDS_EN; sep = " "; break;
+    case 1: wl = BIP39_WORDS_JA; sep = "\xe3\x80\x80"; break; // U+3000
+    default: return false;
+    }
+    const size_t nbits = ent.size() * 8;
+    const size_t nwords = (nbits + 10) / 11; // ceil(nbits/11); 0 for empty input
+    auto bit = [&](size_t i) -> int {
+        return i < nbits ? ((ent[i / 8] >> (7 - i % 8)) & 1) : 0; // tail zero-padded
+    };
+    std::string phrase;
+    for (size_t w = 0; w < nwords; w++) {
+        int idx = 0;
+        for (int b = 0; b < 11; b++) idx = (idx << 1) | bit(w * 11 + b);
+        if (w) phrase += sep;
+        phrase += wl[idx];
+    }
+    out.assign(phrase.begin(), phrase.end());
+    return true;
 }
 
 namespace {
@@ -1126,6 +1160,26 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     const bool verdict = !out.empty() && (out[0] & 1);
                     popstack(stack);
                     stack.push_back(verdict ? vchTrue : vchFalse);
+                }
+                break;
+
+                case OP_MNEMONIC:
+                {
+                    // (bytes lang -- mnemonic)  encode an arbitrary byte string as mnemonic
+                    // words via a BIP39 wordlist (0=English, 1=Japanese): 11-bit groups,
+                    // tail zero-padded, >=1 word for any non-empty input. Deterministic
+                    // (pinned wordlists), so it is safe in a spend condition. Not a
+                    // checksummed seed phrase; it turns bytes into word tokens (e.g. to
+                    // feed OP_DREAM/OP_TRANSLATE). Only an unknown language fails.
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const int lang = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    valtype phrase;
+                    if (!MortalMnemonic(stacktop(-2), lang, phrase))
+                        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+                    popstack(stack);
+                    popstack(stack);
+                    stack.push_back(phrase);
                 }
                 break;
 
