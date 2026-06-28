@@ -1435,14 +1435,14 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         std::vector<std::vector<unsigned char>> mag;
         for (const std::string& s : args.GetArgs("-mortalsuccessor")) mag.emplace_back(s.begin(), s.end());
         for (const std::string& p : args.GetArgs("-mortalsuccessorfile")) {
-            std::ifstream f(fs::PathFromString(p), std::ios::binary | std::ios::ate);
+            std::ifstream f{fs::PathFromString(p).std_path(), std::ios::binary | std::ios::ate};
             if (!f.good()) return InitError(Untranslated(strprintf("-mortalsuccessorfile: cannot read %s", p)));
             std::streamsize sz = f.tellg(); f.seekg(0);
             std::vector<unsigned char> novel(sz > 0 ? (size_t)sz : 0);
             if (sz > 0) f.read(reinterpret_cast<char*>(novel.data()), sz);
             mag.push_back(std::move(novel));
         }
-        if (!mag.empty()) LogPrintf("Mortal Ledger: loaded %u successor novel(s) into the magazine\n", (unsigned)mag.size());
+        if (!mag.empty()) LogInfo("Mortal Ledger: loaded %u successor novel(s) into the magazine\n", (unsigned)mag.size());
         node::MortalLoadSuccessors(std::move(mag));
     }
 
@@ -1453,7 +1453,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         std::vector<unsigned char> g;
         if (args.IsArgSet("-mortalgenesisfile")) {
             const std::string p = args.GetArg("-mortalgenesisfile", "");
-            std::ifstream f(fs::PathFromString(p), std::ios::binary | std::ios::ate);
+            std::ifstream f{fs::PathFromString(p).std_path(), std::ios::binary | std::ios::ate};
             if (!f.good()) return InitError(Untranslated(strprintf("-mortalgenesisfile: cannot read %s", p)));
             std::streamsize sz = f.tellg(); f.seekg(0);
             g.resize(sz > 0 ? (size_t)sz : 0);
@@ -1462,7 +1462,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             const std::string s = args.GetArg("-mortalgenesis", "");
             g.assign(s.begin(), s.end());
         }
-        if (!g.empty()) { LogPrintf("Mortal Ledger: genesis novel configured (%u bytes)\n", (unsigned)g.size()); node::MortalLoadGenesis(std::move(g)); }
+        if (!g.empty()) { LogInfo("Mortal Ledger: genesis novel configured (%u bytes)\n", (unsigned)g.size()); node::MortalLoadGenesis(std::move(g)); }
     }
 
     auto opt_max_upload = ParseByteUnits(args.GetArg("-maxuploadtarget", DEFAULT_MAX_UPLOAD_TARGET), ByteUnit::M);
