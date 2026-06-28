@@ -139,7 +139,11 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t&
     block_out.reset();
     block.hashMerkleRoot = BlockMerkleRoot(block);
 
-    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !CheckProofOfWork(block.GetHash(), block.nBits, chainman.GetConsensus()) && !chainman.m_interrupt) {
+    // Mortal Ledger: this block transcribes the novel byte at the next height, so
+    // grind until the hash satisfies BOTH the proof of work and the quotation.
+    const int nHeight{WITH_LOCK(::cs_main, return chainman.ActiveChain().Height()) + 1};
+
+    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !(CheckProofOfWork(block.GetHash(), block.nBits, chainman.GetConsensus()) && CheckQuotation(block.GetHash(), nHeight)) && !chainman.m_interrupt) {
         ++block.nNonce;
         --max_tries;
     }

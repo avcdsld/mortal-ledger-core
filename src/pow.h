@@ -33,6 +33,12 @@ unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nF
 bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&);
 bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Params&);
 
+/** Mortal Ledger: Proof of Quotation. The block hash must carry the next byte of
+ *  the novel being transcribed at this height (the head byte equals the novel's
+ *  next byte). Concatenate the head bytes of the chain and the novel reappears.
+ *  This is the quotation half; the pace half rides nBits/target as usual. */
+bool CheckQuotation(const uint256& hash, int nHeight);
+
 /**
  * Return false if the proof-of-work requirement specified by new_nbits at a
  * given height is not possible, given the proof-of-work on the prior block as

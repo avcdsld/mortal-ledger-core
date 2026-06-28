@@ -11,6 +11,8 @@
 #include <uint256.h>
 #include <util/check.h>
 
+#include <string>
+
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)
 {
     assert(pindexLast != nullptr);
@@ -167,5 +169,41 @@ bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Par
     if (UintToArith256(hash) > bnTarget)
         return false;
 
+    return true;
+}
+
+// Mortal Ledger: Proof of Quotation. The mined hash's head byte must equal the
+// next byte of the novel being transcribed. We constrain the lowest internal
+// byte (hash.begin()[0]); the proof-of-work magnitude lives in the high bytes,
+// so the two predicates do not collide. Heights map to byte offsets, so the
+// chain's head bytes, read in order, reproduce the novel exactly. (Demo: a fixed
+// opening with k=1 byte/block; the full version reads the offset from canon
+// state and carves k bytes.)
+bool CheckQuotation(const uint256& hash, int nHeight)
+{
+    if (nHeight < 1) return true; // genesis and below transcribe nothing
+    // The canon being transcribed. The opening of 萩原朔太郎『猫町』(UTF-8; the
+    // source file is UTF-8, so the compiler encodes the bytes). In the full node
+    // this comes from the OP_SOURCE-registered canon; here it is fixed.
+    static const std::string NOVEL = "旅への誘いが、次第に私の空想から消えて行つた。";
+    static const int K = 1; // writing granularity (demo; calibrated on the Pi)
+
+    // Canon state: the transcription offset is the chain's progress. Each block
+    // carves K bytes, so by height h we have written (h-1)*K bytes.
+    const size_t offset = (size_t)(nHeight - 1) * (size_t)K;
+
+    // Completion = death. When the novel is fully transcribed, no further block
+    // can satisfy the quotation, so the chain starves and halts (until a
+    // successor is registered, which OP_SOURCE will do). The act of writing the
+    // last byte is the last act the chain can perform.
+    if (offset >= NOVEL.size()) return false;
+
+    // The block hash must carry the novel's next K bytes in its head. (We
+    // constrain the low internal bytes; the proof-of-work magnitude lives in the
+    // high bytes, so the two predicates are orthogonal.)
+    const size_t n = std::min((size_t)K, NOVEL.size() - offset);
+    for (size_t i = 0; i < n; i++) {
+        if ((unsigned char)hash.begin()[i] != (unsigned char)NOVEL[offset + i]) return false;
+    }
     return true;
 }
