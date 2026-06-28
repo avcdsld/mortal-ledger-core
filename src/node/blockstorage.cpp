@@ -151,6 +151,7 @@ bool BlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, s
                 // without the quotation requirement (caught by the regtest reindex test).
                 pindexNew->m_canon_source_height = diskindex.m_canon_source_height;
                 pindexNew->m_canon_offset        = diskindex.m_canon_offset;
+                pindexNew->m_canon_index         = diskindex.m_canon_index;
 
                 if (!CheckProofOfWork(pindexNew->GetBlockHash(), pindexNew->nBits, consensusParams)) {
                     LogError("%s: CheckProofOfWork failed: %s\n", __func__, pindexNew->ToString());

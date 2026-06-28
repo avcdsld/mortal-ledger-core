@@ -496,6 +496,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-fastprune", "Use smaller block files and lower minimum prune height for testing purposes", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
 #if HAVE_SYSTEM
     argsman.AddArg("-blocknotify=<cmd>", "Execute command when the best block changes (%s in cmd is replaced by block hash)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-mortalsuccessor=<text>", "Mortal Ledger: append a successor novel (literal UTF-8 text) to this node's successor magazine. Repeatable; the magazine is consumed in the given order, one entry per completed novel. An empty magazine lets the chain starve at completion (no successor named). Local mining policy, not consensus.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-mortalsuccessorfile=<path>", "Mortal Ledger: append a successor novel read from <path> (the whole file = one novel) to the successor magazine. Repeatable; appended after any -mortalsuccessor entries.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 #endif
     argsman.AddArg("-blockreconstructionextratxn=<n>", strprintf("Extra transactions to keep in memory for compact block reconstructions (default: %u)", DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blocksonly", strprintf("Whether to reject transactions from network peers. Disables automatic broadcast and rebroadcast of transactions, unless the source peer has the 'forcerelay' permission. RPC transactions are not affected. (default: %u)", DEFAULT_BLOCKSONLY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -1422,6 +1424,25 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 {
     const ArgsManager& args = *Assert(node.args);
     const CChainParams& chainparams = Params();
+
+    // Mortal Ledger: load this node's successor magazine (local mining policy). The miner
+    // registers magazine[novel ordinal] at each seam; an empty magazine lets the chain
+    // starve at completion (no successor named). Succession is open, so this is NOT
+    // consensus — different nodes may carry different magazines.
+    {
+        std::vector<std::vector<unsigned char>> mag;
+        for (const std::string& s : args.GetArgs("-mortalsuccessor")) mag.emplace_back(s.begin(), s.end());
+        for (const std::string& p : args.GetArgs("-mortalsuccessorfile")) {
+            std::ifstream f(fs::PathFromString(p), std::ios::binary | std::ios::ate);
+            if (!f.good()) return InitError(Untranslated(strprintf("-mortalsuccessorfile: cannot read %s", p)));
+            std::streamsize sz = f.tellg(); f.seekg(0);
+            std::vector<unsigned char> novel(sz > 0 ? (size_t)sz : 0);
+            if (sz > 0) f.read(reinterpret_cast<char*>(novel.data()), sz);
+            mag.push_back(std::move(novel));
+        }
+        if (!mag.empty()) LogPrintf("Mortal Ledger: loaded %u successor novel(s) into the magazine\n", (unsigned)mag.size());
+        node::MortalLoadSuccessors(std::move(mag));
+    }
 
     auto opt_max_upload = ParseByteUnits(args.GetArg("-maxuploadtarget", DEFAULT_MAX_UPLOAD_TARGET), ByteUnit::M);
     if (!opt_max_upload) {

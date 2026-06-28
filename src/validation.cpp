@@ -2370,7 +2370,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // against it (and 写字本位 issuance below), then store the leaving state on the index.
     // The active novel's bytes are resolved from the canon state (genesis or source block).
     const CanonState canon_in = CanonEnter(pindex->nHeight,
-        pindex->pprev ? CanonState{pindex->pprev->m_canon_source_height, pindex->pprev->m_canon_offset} : CanonState{},
+        pindex->pprev ? CanonState{pindex->pprev->m_canon_source_height, pindex->pprev->m_canon_offset, pindex->pprev->m_canon_index} : CanonState{},
         params.GetConsensus());
     const std::vector<unsigned char> canon_reg = ExtractCanonRegistration(block);
     const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, pindex, params.GetConsensus(), m_blockman);
@@ -2733,6 +2733,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         const CanonState canon_out = CanonNext(canon_in, canon_novel, pindex->nHeight, canon_reg);
         pindex->m_canon_source_height = canon_out.source_height;
         pindex->m_canon_offset = canon_out.offset;
+        pindex->m_canon_index = canon_out.index;
         pindex->nStatus |= BLOCK_CANON;
         m_blockman.m_dirty_blockindex.insert(pindex);
     }

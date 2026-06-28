@@ -307,6 +307,7 @@ CanonState CanonNext(const CanonState& in, const std::vector<unsigned char>& nov
     if (in.offset >= novel.size() && !reg.empty()) {
         out.source_height = height;
         out.offset = 0;
+        out.index = in.index + 1;   // a new novel begins: advance the ordinal
     }
     out.offset += CANON_K;
     return out;

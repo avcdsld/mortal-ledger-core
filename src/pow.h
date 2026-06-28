@@ -65,6 +65,7 @@ bool CheckPaceTarget(uint256 hash, unsigned int nBits, const Consensus::Params& 
 struct CanonState {
     int source_height{-1};
     uint64_t offset{0};
+    uint32_t index{0};   // novel ordinal (0 = genesis); selects the local successor magazine entry at a seam
     bool active() const { return source_height >= 0; }
 };
 

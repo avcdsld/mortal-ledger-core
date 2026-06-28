@@ -184,6 +184,18 @@ std::optional<BlockRef> WaitTipChanged(ChainstateManager& chainman, KernelNotifi
  * @returns false if interrupted.
  */
 bool CooldownIfHeadersAhead(ChainstateManager& chainman, KernelNotifications& kernel_notifications, const BlockRef& last_tip, bool& interrupt_mining);
+
+/** Mortal Ledger: the local successor "magazine" — the ordered novels this node will
+ *  register at successive seams. Succession is OPEN (any miner may register any text);
+ *  WHAT this node registers is local mining policy, not consensus. The novel ordinal
+ *  (CanonState::index; genesis = 0) selects the entry, so the choice is deterministic
+ *  and reorg-safe: at the seam leaving novel i, register magazine[i] (magazine[0] is the
+ *  first successor after the genesis novel). An empty/exhausted magazine => no
+ *  registration => the chain starves (completion = death). Loaded once at startup from
+ *  -mortalsuccessor / -mortalsuccessorfile; replaces the old hard-coded successor. */
+void MortalLoadSuccessors(std::vector<std::vector<unsigned char>> successors);
+std::vector<std::vector<unsigned char>> MortalSuccessors();
+std::vector<unsigned char> MortalNextSuccessor(uint32_t novel_index);
 } // namespace node
 
 #endif // BITCOIN_NODE_MINER_H

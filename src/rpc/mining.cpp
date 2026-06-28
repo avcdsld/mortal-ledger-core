@@ -155,7 +155,7 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t&
     // fork height there is no canon and no quotation slice is required.
     const CBlockIndex* tip = WITH_LOCK(::cs_main, return chainman.ActiveChain().Tip());
     const CanonState canon_in = CanonEnter(tip->nHeight + 1,
-        CanonState{tip->m_canon_source_height, tip->m_canon_offset}, consensus);
+        CanonState{tip->m_canon_source_height, tip->m_canon_offset, tip->m_canon_index}, consensus);
     const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, tip, consensus, chainman.m_blockman);
     const std::vector<unsigned char> slice = canon_in.active()
         ? CanonExpectedSlice(canon_in, canon_novel, ExtractCanonRegistration(block))
@@ -1166,6 +1166,40 @@ static RPCHelpMan submitheader()
     };
 }
 
+static RPCHelpMan listsuccessors()
+{
+    return RPCHelpMan{"listsuccessors",
+        "\nMortal Ledger: list this node's configured successor magazine — the ordered novels\n"
+        "it will register at successive seams. Succession is open (any miner may register any\n"
+        "text); this magazine is local mining policy, not consensus. An empty magazine lets the\n"
+        "chain starve at completion.\n",
+        {},
+        RPCResult{RPCResult::Type::ARR, "", "", {
+            {RPCResult::Type::OBJ, "", "", {
+                {RPCResult::Type::NUM, "index", "magazine position (0-based); entry i is registered at the seam leaving novel ordinal i (genesis = 0)"},
+                {RPCResult::Type::NUM, "bytes", "length of the successor novel in bytes"},
+                {RPCResult::Type::STR, "text", "the successor novel decoded as UTF-8 (best effort)"},
+                {RPCResult::Type::STR_HEX, "hex", "the successor novel bytes"},
+            }},
+        }},
+        RPCExamples{HelpExampleCli("listsuccessors", "") + HelpExampleRpc("listsuccessors", "")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+        {
+            UniValue arr(UniValue::VARR);
+            const auto mag = node::MortalSuccessors();
+            for (size_t i = 0; i < mag.size(); i++) {
+                UniValue o(UniValue::VOBJ);
+                o.pushKV("index", (int)i);
+                o.pushKV("bytes", (int)mag[i].size());
+                o.pushKV("text", std::string(mag[i].begin(), mag[i].end()));
+                o.pushKV("hex", HexStr(mag[i]));
+                arr.push_back(std::move(o));
+            }
+            return arr;
+        },
+    };
+}
+
 void RegisterMiningRPCCommands(CRPCTable& t)
 {
     static const CRPCCommand commands[]{
@@ -1176,6 +1210,7 @@ void RegisterMiningRPCCommands(CRPCTable& t)
         {"mining", &getblocktemplate},
         {"mining", &submitblock},
         {"mining", &submitheader},
+        {"mining", &listsuccessors},
 
         {"hidden", &generatetoaddress},
         {"hidden", &generatetodescriptor},

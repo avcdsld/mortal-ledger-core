@@ -33,6 +33,16 @@
 
 namespace node {
 
+// Mortal Ledger: the local successor magazine (see node/miner.h). Process-global mining
+// policy, set once at startup and read when assembling a seam block. Not consensus.
+static std::vector<std::vector<unsigned char>> g_mortal_successors;
+void MortalLoadSuccessors(std::vector<std::vector<unsigned char>> successors) { g_mortal_successors = std::move(successors); }
+std::vector<std::vector<unsigned char>> MortalSuccessors() { return g_mortal_successors; }
+std::vector<unsigned char> MortalNextSuccessor(uint32_t novel_index)
+{
+    return novel_index < g_mortal_successors.size() ? g_mortal_successors[novel_index] : std::vector<unsigned char>{};
+}
+
 int64_t GetMinimumTime(const CBlockIndex* pindexPrev, const int64_t difficulty_adjustment_interval)
 {
     int64_t min_time{pindexPrev->GetMedianTimePast() + 1};
@@ -182,13 +192,16 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     // scriptSig (tag "MLSR" + bytes); the coinbase mints exactly the bytes this block
     // transcribes (CanonIssuance), so the seam block mints for the successor's first byte.
     const CanonState canon_in = CanonEnter(nHeight,
-        CanonState{pindexPrev->m_canon_source_height, pindexPrev->m_canon_offset},
+        CanonState{pindexPrev->m_canon_source_height, pindexPrev->m_canon_offset, pindexPrev->m_canon_index},
         chainparams.GetConsensus());
     const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, pindexPrev, chainparams.GetConsensus(), m_chainstate.m_blockman);
     std::vector<unsigned char> reg;
     if (canon_in.active() && CanonExpectedSlice(canon_in, canon_novel, {}).empty()) {
-        static const std::string kSuccessor = "Call me Ishmael."; // Melville, Moby-Dick
-        reg.assign(kSuccessor.begin(), kSuccessor.end());
+        // The active novel is exhausted (a seam). Succession is OPEN; WHICH novel this
+        // node registers is local policy: the next entry from the successor magazine,
+        // selected by the novel ordinal (deterministic, reorg-safe). An empty/exhausted
+        // magazine means no registration -> the chain starves (completion = death).
+        reg = MortalNextSuccessor(canon_in.index);
     }
     const CAmount block_reward{nFees + (canon_in.active()
         ? CanonIssuance(canon_in, canon_novel, reg)

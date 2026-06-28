@@ -164,6 +164,11 @@ public:
     //! genesis constant or the source block's coinbase.
     int m_canon_source_height{-1};
     uint64_t m_canon_offset{0};
+    //! Mortal Ledger: novel ordinal (0 = genesis; +1 at each seam). Selects which entry
+    //! of the node's local successor magazine the miner registers at a seam. A pure fold
+    //! like the rest of the canon state; informational for mining policy (consensus
+    //! validates via source_height/offset/registration, not this).
+    uint32_t m_canon_index{0};
 
     explicit CBlockIndex(const CBlockHeader& block)
         : nVersion{block.nVersion},
@@ -379,6 +384,7 @@ public:
         if (obj.nStatus & BLOCK_CANON) {
             READWRITE(VARINT_MODE(obj.m_canon_source_height, VarIntMode::NONNEGATIVE_SIGNED));
             READWRITE(VARINT(obj.m_canon_offset));
+            READWRITE(VARINT(obj.m_canon_index));
         }
     }
 
