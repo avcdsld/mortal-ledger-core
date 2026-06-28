@@ -6,11 +6,13 @@
 #ifndef BITCOIN_POW_H
 #define BITCOIN_POW_H
 
+#include <consensus/amount.h>
 #include <consensus/params.h>
 
 #include <cstdint>
 #include <vector>
 
+class CBlock;
 class CBlockHeader;
 class CBlockIndex;
 class uint256;
@@ -54,6 +56,11 @@ bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Par
 std::vector<unsigned char> CanonExpectedSlice(const std::vector<unsigned char>& reg);
 void CanonAdvance(const std::vector<unsigned char>& reg);
 bool HashCarriesSlice(const uint256& hash, const std::vector<unsigned char>& slice);
+
+/** Mortal Ledger: the successor novel a block registers in its coinbase (empty if
+ *  none), and the coinbase issuance = bytes transcribed this block × 1 BAB. */
+std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block);
+CAmount CanonIssuance(const std::vector<unsigned char>& reg);
 
 /**
  * Return false if the proof-of-work requirement specified by new_nbits at a

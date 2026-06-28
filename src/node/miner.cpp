@@ -174,8 +174,17 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     // Add an output that spends the full coinbase reward.
     coinbaseTx.vout.resize(1);
     coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
-    // Block subsidy + fees
-    const CAmount block_reward{nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus())};
+    // Mortal Ledger: OP_SOURCE succession + 写字本位 issuance. If the active novel
+    // is exhausted, this miner names the successor (open choice) and registers it in
+    // the coinbase scriptSig (tag "MLSR" + the successor's bytes). The coinbase mints
+    // exactly the bytes this block transcribes (CanonIssuance, given that
+    // registration), so the seam block mints for the successor's first byte too.
+    std::vector<unsigned char> reg;
+    if (CanonExpectedSlice({}).empty()) {
+        static const std::string kSuccessor = "Call me Ishmael."; // Melville, Moby-Dick
+        reg.assign(kSuccessor.begin(), kSuccessor.end());
+    }
+    const CAmount block_reward{nFees + CanonIssuance(reg)};
     coinbaseTx.vout[0].nValue = block_reward;
     coinbase_tx.block_reward_remaining = block_reward;
 
@@ -190,6 +199,11 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         // bytes long (bad-cb-length), so tests and regtest include a dummy
         // extraNonce (OP_0)
         coinbaseTx.vin[0].scriptSig << OP_0;
+    }
+    if (!reg.empty()) {
+        static const unsigned char TAG[4] = {'M','L','S','R'};
+        coinbaseTx.vin[0].scriptSig.insert(coinbaseTx.vin[0].scriptSig.end(), TAG, TAG + sizeof(TAG));
+        coinbaseTx.vin[0].scriptSig.insert(coinbaseTx.vin[0].scriptSig.end(), reg.begin(), reg.end());
     }
     coinbase_tx.script_sig_prefix = coinbaseTx.vin[0].scriptSig;
     Assert(nHeight > 0);

@@ -1836,16 +1836,18 @@ PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxM
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
 {
     // Mortal Ledger: 写字本位 (transcription standard). The coinbase no longer
-    // mints a halving money subsidy. It mints BAB in PROPORTION to the bytes of
-    // the novel transcribed this block (rate: 1 BAB per byte). The literary count
-    // (bytes/characters of the book) and the coin (BAB) are different units; there
-    // is no reason to force them equal, so the amount is decoupled from the raw
-    // byte count and just scales with it. At the writing granularity k this is a
-    // flat k BAB per block (less on the final partial block; the exact bytes come
-    // from canon state once that is wired in). No halving, no fixed cap. Supply
-    // grows only with transcription and ends at death (canon exhausted, no
-    // successor). The inherited Bitcoin supply predates the fork and is untouched.
-    const int   BYTES_PER_BLOCK = 3;     // writing granularity k (demo; calibrated on the Pi)
+    // mints a halving money subsidy; it mints BAB equal to the bytes transcribed
+    // this block (rate: 1 BAB per byte). The AUTHORITATIVE issuance is CanonIssuance()
+    // (= the length of the slice this block carries × 1 BAB), enforced in
+    // ConnectBlock and used by the block assembler, so it tracks the actual
+    // transcription: k BAB on a normal block, less on a novel's final partial block,
+    // and none once the canon is exhausted with no successor (death = no issuance).
+    // This function remains as the nominal per-block subsidy for RPC/index callers.
+    // At the consensus writing granularity (k=1) it equals CanonIssuance for every
+    // block actually produced. The literary unit and the coin (BAB) are different
+    // units; we do not force them equal. The inherited Bitcoin supply predates the
+    // fork and is untouched.
+    const int   BYTES_PER_BLOCK = 1;     // writing granularity k (demo; calibrated on the Pi)
     const CAmount BAB_PER_BYTE  = COIN;  // 1 BAB per transcribed byte
     return BYTES_PER_BLOCK * BAB_PER_BYTE;
 }
@@ -2293,25 +2295,6 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
  *  can fail if those validity checks fail (among other reasons). */
-// Mortal Ledger: OP_SOURCE succession. When the active novel is exhausted, the
-// block that mines the seam registers the successor novel in its coinbase scriptSig,
-// tagged "MLSR" (Mortal Ledger Source Registration) followed by the novel's bytes.
-// (Demo encoding; the full work registers the successor via an OP_SOURCE output.)
-// Returns the registered bytes, or empty if none.
-static std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block)
-{
-    static const unsigned char TAG[4] = {'M','L','S','R'};
-    if (block.vtx.empty() || block.vtx[0]->vin.empty()) return {};
-    const CScript& s = block.vtx[0]->vin[0].scriptSig;
-    if (s.size() < sizeof(TAG)) return {};
-    for (size_t i = 0; i + sizeof(TAG) <= s.size(); i++) {
-        bool match = true;
-        for (size_t j = 0; j < sizeof(TAG); j++) if (s[i + j] != TAG[j]) { match = false; break; }
-        if (match) return std::vector<unsigned char>(s.begin() + i + sizeof(TAG), s.end());
-    }
-    return {};
-}
-
 bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, CBlockIndex* pindex,
                                CCoinsViewCache& view, bool fJustCheck)
 {
@@ -2641,7 +2624,12 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<SecondsDouble>(m_chainman.time_connect),
              Ticks<MillisecondsDouble>(m_chainman.time_connect) / m_chainman.num_blocks_total);
 
-    CAmount blockReward = nFees + GetBlockSubsidy(pindex->nHeight, params.GetConsensus());
+    // Mortal Ledger: 写字本位. The coinbase may mint at most the bytes transcribed
+    // this block (CanonIssuance), read from the canon state and the successor (if
+    // any) registered in this block's coinbase. The canon is still at the pre-advance
+    // offset here (CanonAdvance runs at the end on success), so this is the slice
+    // this block carries.
+    CAmount blockReward = nFees + CanonIssuance(ExtractCanonRegistration(block));
     if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
         state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
                       strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), blockReward));

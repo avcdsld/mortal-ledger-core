@@ -7,7 +7,10 @@
 
 #include <arith_uint256.h>
 #include <chain.h>
+#include <consensus/amount.h>
 #include <primitives/block.h>
+#include <primitives/transaction.h>
+#include <script/script.h>
 #include <uint256.h>
 #include <util/check.h>
 
@@ -225,4 +228,36 @@ bool HashCarriesSlice(const uint256& hash, const std::vector<unsigned char>& sli
     for (size_t i = 0; i < slice.size(); i++)
         if ((unsigned char)hash.begin()[i] != slice[i]) return false;
     return true;
+}
+
+// OP_SOURCE succession: a miner registers the successor novel in the coinbase
+// scriptSig, tagged "MLSR" (Mortal Ledger Source Registration) followed by the
+// novel's bytes. (Demo encoding; the full work registers via an OP_SOURCE output.)
+// Returns the registered bytes, or empty if none.
+std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block)
+{
+    static const unsigned char TAG[4] = {'M','L','S','R'};
+    if (block.vtx.empty() || block.vtx[0]->vin.empty()) return {};
+    const CScript& s = block.vtx[0]->vin[0].scriptSig;
+    if (s.size() < sizeof(TAG)) return {};
+    for (size_t i = 0; i + sizeof(TAG) <= s.size(); i++) {
+        bool match = true;
+        for (size_t j = 0; j < sizeof(TAG); j++) if (s[i + j] != TAG[j]) { match = false; break; }
+        if (match) return std::vector<unsigned char>(s.begin() + i + sizeof(TAG), s.end());
+    }
+    return {};
+}
+
+// 写字本位 (transcription standard): the coinbase mints BAB equal to the bytes
+// actually transcribed this block (rate: 1 BAB per byte). That is the length of
+// the slice this block carries, given the successor registration reg. At the
+// writing granularity k this is k BAB per block, less on a novel's final partial
+// block, and zero once the canon is exhausted with no successor (death = no
+// issuance). Supply is thus bounded by the text's length and grows only with
+// transcription. The literary unit (the book's bytes) and the coin (BAB) are
+// different units; we do not force them equal, the amount only scales with the
+// count.
+CAmount CanonIssuance(const std::vector<unsigned char>& reg)
+{
+    return (CAmount)CanonExpectedSlice(reg).size() * COIN;
 }

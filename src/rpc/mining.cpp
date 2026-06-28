@@ -140,28 +140,14 @@ static RPCHelpMan getnetworkhashps()
 static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t& max_tries, std::shared_ptr<const CBlock>& block_out, bool process_new_block)
 {
     block_out.reset();
-
-    // Mortal Ledger: Proof of Quotation with OP_SOURCE succession. This block must
-    // transcribe the next slice of the active novel. If the active novel is
-    // exhausted, the miner registers a successor (open choice) in the coinbase
-    // scriptSig (tag "MLSR" + the successor's bytes); transcription continues into
-    // it. Inject the registration before recomputing the merkle root, then grind
-    // until the hash satisfies BOTH the proof of work and the quotation slice.
-    std::vector<unsigned char> reg;
-    if (CanonExpectedSlice({}).empty()) {
-        // The active novel is fully transcribed. This miner names the successor.
-        static const std::string kSuccessor = "Call me Ishmael."; // Melville, Moby-Dick
-        reg.assign(kSuccessor.begin(), kSuccessor.end());
-        CMutableTransaction cb(*block.vtx[0]);
-        CScript& ss = cb.vin[0].scriptSig;
-        static const unsigned char TAG[4] = {'M','L','S','R'};
-        ss.insert(ss.end(), TAG, TAG + sizeof(TAG));
-        ss.insert(ss.end(), reg.begin(), reg.end());
-        block.vtx[0] = MakeTransactionRef(std::move(cb));
-    }
     block.hashMerkleRoot = BlockMerkleRoot(block);
 
-    const std::vector<unsigned char> slice = CanonExpectedSlice(reg);
+    // Mortal Ledger: Proof of Quotation with OP_SOURCE succession. The block
+    // template already carries any successor registration in its coinbase (the block
+    // assembler injects it when the active novel is exhausted), so read the slice
+    // this block must transcribe from that registration, then grind until the hash
+    // satisfies BOTH the proof of work and the quotation slice.
+    const std::vector<unsigned char> slice = CanonExpectedSlice(ExtractCanonRegistration(block));
 
     while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !(CheckProofOfWork(block.GetHash(), block.nBits, chainman.GetConsensus()) && HashCarriesSlice(block.GetHash(), slice)) && !chainman.m_interrupt) {
         ++block.nNonce;
