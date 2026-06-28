@@ -10,6 +10,7 @@
 #include <consensus/params.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 class CBlock;
@@ -44,31 +45,55 @@ bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Par
  *  then require the magnitude <= target (the LWMA-retargeted pace). */
 bool CheckPaceTarget(uint256 hash, unsigned int nBits, const Consensus::Params& params);
 
-/** Mortal Ledger: Proof of Quotation with OP_SOURCE succession.
+/** Mortal Ledger: Proof of Quotation with OP_SOURCE succession, as a per-block canon
+ *  state carried on the block index (reorg-/reindex-safe; see chain.h).
  *
- *  Canon state (current novel + transcription offset) lives in pow.cpp as
- *  process-global state, advanced when a block is connected. The block hash must
- *  carry the next slice of the novel in its head bytes; concatenate the head
- *  bytes of the chain and the novel reappears. When the active novel is fully
- *  transcribed, the block must register a successor (reg, carried in the coinbase)
- *  and transcription continues into it. With no successor the chain starves
- *  (completion = death).
+ *  The canon transition is a PURE fold over ancestors: the state leaving a block is a
+ *  function of the state entering it (= the parent's leaving state) and the successor
+ *  the block registers in its coinbase. No process globals, so competing branches never
+ *  contaminate each other and a restart recomputes identically. The block hash must
+ *  carry the next slice of the active novel in its head bytes; concatenate the head
+ *  bytes of the chain and the novel reappears. When the active novel is exhausted the
+ *  block must register a successor and transcription continues into it; with none the
+ *  chain starves (completion = death).
  *
- *  - CanonExpectedSlice(reg): the K bytes the next block must carry, given the
- *    successor registration reg (empty if none). Empty result => no valid block.
- *  - CanonAdvance(reg): advance the canon after a block is accepted (real
- *    connection only); installs the successor at the seam.
- *  - HashCarriesSlice(hash, slice): does the hash carry the slice in its low
- *    internal bytes? (PoW magnitude lives in the high bytes, so the two
- *    predicates are orthogonal.) */
-std::vector<unsigned char> CanonExpectedSlice(const std::vector<unsigned char>& reg);
-void CanonAdvance(const std::vector<unsigned char>& reg);
+ *  CanonState identifies the active novel by source_height — the height of the block
+ *  that installed it (== Consensus::Params::nMortalLedgerHeight for the genesis novel;
+ *  < 0 = inactive / pre-fork) — and the transcription offset reached. The novel's bytes
+ *  are resolved on demand (genesis constant, or the source block's coinbase) and passed
+ *  in, so this header stays free of block I/O. */
+struct CanonState {
+    int source_height{-1};
+    uint64_t offset{0};
+    bool active() const { return source_height >= 0; }
+};
+
+/** The genesis novel (consensus constant; the canon the chain begins at height H). */
+const std::string& CanonGenesisNovel();
+
+/** The canon state ENTERING the block at `height`, given its parent's leaving state.
+ *  Below H: inactive. At H: the genesis novel begins. Above H: inherit the parent. */
+CanonState CanonEnter(int height, const CanonState& parent_after, const Consensus::Params& params);
+
+/** The K bytes this block must transcribe, given the entering state, the active novel's
+ *  bytes (resolved from in.source_height) and any successor `reg` registered in THIS
+ *  block (empty if none). When the active novel is exhausted the slice is read from reg;
+ *  with neither, the result is empty => no valid block. */
+std::vector<unsigned char> CanonExpectedSlice(const CanonState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg);
+
+/** The canon state LEAVING the block at `height` (stored on its index), given the
+ *  entering state, the active novel's bytes and the block's registration. Installs a
+ *  registered successor at the seam where the active novel ends. Pure; no globals. */
+CanonState CanonNext(const CanonState& in, const std::vector<unsigned char>& novel, int height, const std::vector<unsigned char>& reg);
+
+/** Does the hash carry the slice in its low internal bytes? (PoW magnitude lives in the
+ *  high bytes, so quotation and pace are orthogonal.) Empty slice => no valid block. */
 bool HashCarriesSlice(const uint256& hash, const std::vector<unsigned char>& slice);
 
-/** Mortal Ledger: the successor novel a block registers in its coinbase (empty if
- *  none), and the coinbase issuance = bytes transcribed this block × 1 BAB. */
+/** Mortal Ledger: the successor novel a block registers in its coinbase (empty if none),
+ *  and the coinbase issuance = bytes transcribed this block × 1 BAB. */
 std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block);
-CAmount CanonIssuance(const std::vector<unsigned char>& reg);
+CAmount CanonIssuance(const CanonState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg);
 
 /**
  * Return false if the proof-of-work requirement specified by new_nbits at a

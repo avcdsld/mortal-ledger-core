@@ -149,13 +149,26 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t&
     // satisfies BOTH the pace (magnitude vs the LWMA target, quotation bytes zeroed)
     // and the quotation slice (the next bytes of the novel).
     const Consensus::Params& consensus = chainman.GetConsensus();
-    const std::vector<unsigned char> slice = CanonExpectedSlice(ExtractCanonRegistration(block));
+    // The canon state entering this block is the active tip's leaving state, folded by
+    // the fork-height rule; resolve the active novel's bytes and read the slice this
+    // block must transcribe (from the successor in its coinbase at a seam). Below the
+    // fork height there is no canon and no quotation slice is required.
+    const CBlockIndex* tip = WITH_LOCK(::cs_main, return chainman.ActiveChain().Tip());
+    const CanonState canon_in = CanonEnter(tip->nHeight + 1,
+        CanonState{tip->m_canon_source_height, tip->m_canon_offset}, consensus);
+    const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, tip, consensus, chainman.m_blockman);
+    const std::vector<unsigned char> slice = canon_in.active()
+        ? CanonExpectedSlice(canon_in, canon_novel, ExtractCanonRegistration(block))
+        : std::vector<unsigned char>{};
     auto pace_ok = [&](const uint256& h) {
         return consensus.fMortalLedgerLWMA ? CheckPaceTarget(h, block.nBits, consensus)
                                            : CheckProofOfWork(h, block.nBits, consensus);
     };
+    auto quote_ok = [&](const uint256& h) {
+        return !canon_in.active() || HashCarriesSlice(h, slice); // pre-fork: no quotation
+    };
 
-    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !(pace_ok(block.GetHash()) && HashCarriesSlice(block.GetHash(), slice)) && !chainman.m_interrupt) {
+    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !(pace_ok(block.GetHash()) && quote_ok(block.GetHash())) && !chainman.m_interrupt) {
         ++block.nNonce;
         --max_tries;
     }

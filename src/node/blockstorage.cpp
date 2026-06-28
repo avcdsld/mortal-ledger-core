@@ -144,6 +144,13 @@ bool BlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, s
                 pindexNew->nNonce         = diskindex.nNonce;
                 pindexNew->nStatus        = diskindex.nStatus;
                 pindexNew->nTx            = diskindex.nTx;
+                // Mortal Ledger: restore the per-block canon state (only present when
+                // BLOCK_CANON was serialized), so a restart loads the transcription fold
+                // from disk instead of replaying the chain. Without this copy the tip's
+                // canon state would reset to inactive and the next block would be mined
+                // without the quotation requirement (caught by the regtest reindex test).
+                pindexNew->m_canon_source_height = diskindex.m_canon_source_height;
+                pindexNew->m_canon_offset        = diskindex.m_canon_offset;
 
                 if (!CheckProofOfWork(pindexNew->GetBlockHash(), pindexNew->nBits, consensusParams)) {
                     LogError("%s: CheckProofOfWork failed: %s\n", __func__, pindexNew->ToString());

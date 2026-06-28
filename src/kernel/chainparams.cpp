@@ -82,6 +82,10 @@ public:
         consensus.signet_blocks = false;
         consensus.signet_challenge.clear();
         consensus.nSubsidyHalvingInterval = 210000;
+        // Mortal Ledger: fork-activation height H. -1 = dormant (the consensus rules
+        // stay inherited Bitcoin until the fork is scheduled). The real H and the
+        // accompanying target reset are set at launch (Pi stage).
+        consensus.nMortalLedgerHeight = -1;
         consensus.script_flag_exceptions.emplace( // BIP16 exception
             uint256{"00000000000002dc756eebf4f49723ed8d30cc28a5f108eb94b1ba88ac4f9c22"}, SCRIPT_VERIFY_NONE);
         consensus.script_flag_exceptions.emplace( // Taproot exception
@@ -219,6 +223,10 @@ public:
         consensus.signet_blocks = false;
         consensus.signet_challenge.clear();
         consensus.nSubsidyHalvingInterval = 210000;
+        // Mortal Ledger: fork-activation height H. -1 = dormant (the consensus rules
+        // stay inherited Bitcoin until the fork is scheduled). The real H and the
+        // accompanying target reset are set at launch (Pi stage).
+        consensus.nMortalLedgerHeight = -1;
         consensus.script_flag_exceptions.emplace( // BIP16 exception
             uint256{"00000000dd30457c001f4095d208cc1296b0eed002427aa599874af7a432b105"}, SCRIPT_VERIFY_NONE);
         consensus.BIP34Height = 21111;
@@ -328,6 +336,10 @@ public:
         consensus.signet_blocks = false;
         consensus.signet_challenge.clear();
         consensus.nSubsidyHalvingInterval = 210000;
+        // Mortal Ledger: fork-activation height H. -1 = dormant (the consensus rules
+        // stay inherited Bitcoin until the fork is scheduled). The real H and the
+        // accompanying target reset are set at launch (Pi stage).
+        consensus.nMortalLedgerHeight = -1;
         consensus.BIP34Height = 1;
         consensus.BIP34Hash = uint256{};
         consensus.BIP65Height = 1;
@@ -480,6 +492,10 @@ public:
         consensus.signet_blocks = true;
         consensus.signet_challenge.assign(bin.begin(), bin.end());
         consensus.nSubsidyHalvingInterval = 210000;
+        // Mortal Ledger: fork-activation height H. -1 = dormant (the consensus rules
+        // stay inherited Bitcoin until the fork is scheduled). The real H and the
+        // accompanying target reset are set at launch (Pi stage).
+        consensus.nMortalLedgerHeight = -1;
         consensus.BIP34Height = 1;
         consensus.BIP34Hash = uint256{};
         consensus.BIP65Height = 1;
@@ -569,6 +585,9 @@ public:
         consensus.signet_blocks = false;
         consensus.signet_challenge.clear();
         consensus.nSubsidyHalvingInterval = 150;
+        // Mortal Ledger: fire the fork at height 1 on regtest, so block 1 begins the
+        // canon (the genesis novel) and the Proof-of-Quotation / 写字本位 demos run.
+        consensus.nMortalLedgerHeight = 1;
         consensus.BIP34Height = 1; // Always active unless overridden
         consensus.BIP34Hash = uint256();
         consensus.BIP65Height = 1;  // Always active unless overridden

@@ -83,6 +83,8 @@ enum BlockStatus : uint32_t {
 
     BLOCK_STATUS_RESERVED    =   256, //!< Unused flag that was previously set on assumeutxo snapshot blocks and their
                                       //!< ancestors before they were validated, and unset when they were validated.
+
+    BLOCK_CANON              =   512, //!< Mortal Ledger: this block carries active canon state (m_canon_*), persisted below.
 };
 
 /** The block chain is a tree shaped structure starting with the
@@ -150,6 +152,18 @@ public:
 
     //! (memory only) Maximum nTime in the chain up to and including this block.
     unsigned int nTimeMax{0};
+
+    //! Mortal Ledger canon state LEAVING this block (after it connects): which novel is
+    //! being transcribed, identified by m_canon_source_height (the height of the block
+    //! that installed it; == Consensus::Params::nMortalLedgerHeight for the genesis
+    //! novel; -1 = inactive / pre-fork), and m_canon_offset, the bytes transcribed so
+    //! far. A pure fold over ancestors: computed once in ConnectBlock from pprev,
+    //! restored from pprev (not undone) on a reorg, and serialized in CDiskBlockIndex
+    //! so a restart/reindex recomputes it identically. Stored by source-height, not by
+    //! bytes, to keep the index small; the bytes are resolved on demand from the
+    //! genesis constant or the source block's coinbase.
+    int m_canon_source_height{-1};
+    uint64_t m_canon_offset{0};
 
     explicit CBlockIndex(const CBlockHeader& block)
         : nVersion{block.nVersion},
@@ -357,6 +371,15 @@ public:
         READWRITE(obj.nTime);
         READWRITE(obj.nBits);
         READWRITE(obj.nNonce);
+
+        // Mortal Ledger: persist the per-block canon state so a restart/reindex
+        // recomputes the transcription fold identically instead of replaying it.
+        // Present only when the block carries active canon (BLOCK_CANON), so pre-fork
+        // blocks cost nothing; source_height is then >= 0 (NONNEGATIVE_SIGNED).
+        if (obj.nStatus & BLOCK_CANON) {
+            READWRITE(VARINT_MODE(obj.m_canon_source_height, VarIntMode::NONNEGATIVE_SIGNED));
+            READWRITE(VARINT(obj.m_canon_offset));
+        }
     }
 
     uint256 ConstructBlockHash() const

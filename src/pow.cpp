@@ -249,39 +249,64 @@ bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Par
 // opening with k=1 byte/block; the full version reads the offset from canon
 // state and carves k bytes.)
 // ---- Mortal Ledger canon state + OP_SOURCE succession ----
-// Demo-grade: process-global, advanced on real block connection. Not reorg- or
-// reindex-safe (a production node would track this per-block-index / in the
-// chainstate and recompute on restart). Sufficient for the regtest demo of
-// succession on a single linear chain.
+// Reorg-/reindex-safe: the canon state is a PURE fold over ancestors, carried on the
+// block index (CBlockIndex::m_canon_*; see chain.h), not in process globals. A reorg
+// restores the state from the parent (nothing to undo); a restart reloads it from disk.
+// The functions here are pure — the node resolves the active novel's bytes (the genesis
+// constant, or the source block's coinbase) and passes them in.
 static const int CANON_K = 1; // writing granularity (demo; calibrated on the Pi)
-static std::string g_canon = "旅への誘いが、次第に私の空想から消えて行つた。"; // genesis canon (萩原朔太郎『猫町』)
-static size_t g_canon_off = 0;
 
-// The K bytes the next block must carry. If the active novel is exhausted, the
-// block must register a successor (reg = the registered novel bytes); with no
-// registration the result is empty, meaning no valid block can be made (the
-// chain starves at completion).
-std::vector<unsigned char> CanonExpectedSlice(const std::vector<unsigned char>& reg)
+// The genesis novel: the canon the chain begins transcribing at the fork height H.
+const std::string& CanonGenesisNovel()
 {
-    std::string novel = g_canon;
-    size_t off = g_canon_off;
-    if (off >= novel.size()) {
-        if (reg.empty()) return {};
-        novel.assign(reg.begin(), reg.end());
-        off = 0;
-    }
-    const size_t n = std::min((size_t)CANON_K, novel.size() - off);
-    return std::vector<unsigned char>(novel.begin() + off, novel.begin() + off + n);
+    static const std::string g = "旅への誘いが、次第に私の空想から消えて行つた。"; // 萩原朔太郎『猫町』
+    return g;
 }
 
-// Advance the canon after a block is accepted (real connection only).
-void CanonAdvance(const std::vector<unsigned char>& reg)
+// The canon state ENTERING the block at `height`, given its parent's leaving state.
+// Below H: inactive (pre-fork is inherited Bitcoin). At H: the genesis novel begins.
+// Above H: inherit the parent's leaving state. Gated only by the fork height.
+CanonState CanonEnter(int height, const CanonState& parent_after, const Consensus::Params& params)
 {
-    if (g_canon_off >= g_canon.size() && !reg.empty()) {
-        g_canon.assign(reg.begin(), reg.end());
-        g_canon_off = 0;
+    if (!params.IsMortalLedgerActive(height)) return CanonState{};          // pre-fork: no canon
+    if (height == params.nMortalLedgerHeight) return CanonState{height, 0}; // the genesis novel begins
+    return parent_after;                                                    // inherit from the parent
+}
+
+// The K bytes the next block must carry, given the entering state, the active novel's
+// bytes `novel` (resolved from in.source_height) and any successor `reg` registered in
+// THIS block. When the active novel is exhausted the slice is read from reg; with
+// neither, the result is empty (the chain starves at completion).
+std::vector<unsigned char> CanonExpectedSlice(const CanonState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg)
+{
+    if (!in.active()) return {};
+    const std::vector<unsigned char>* text = &novel;
+    size_t off = in.offset;
+    if (off >= text->size()) {
+        if (reg.empty()) return {};
+        text = &reg;
+        off = 0;
     }
-    g_canon_off += CANON_K;
+    const size_t n = std::min((size_t)CANON_K, text->size() - off);
+    return std::vector<unsigned char>(text->begin() + off, text->begin() + off + n);
+}
+
+// The canon state LEAVING the block at `height`, given the entering state, the active
+// novel's bytes and the block's registration. At the seam where the active novel ends,
+// a registered successor becomes the active novel — installed by THIS block
+// (source_height = height) with the offset restarted. Gating the switch on actual
+// exhaustion (offset >= novel.size()) means an early registration cannot hijack the
+// canon. Pure; no globals.
+CanonState CanonNext(const CanonState& in, const std::vector<unsigned char>& novel, int height, const std::vector<unsigned char>& reg)
+{
+    if (!in.active()) return CanonState{};
+    CanonState out = in;
+    if (in.offset >= novel.size() && !reg.empty()) {
+        out.source_height = height;
+        out.offset = 0;
+    }
+    out.offset += CANON_K;
+    return out;
 }
 
 // Does the hash carry the expected slice in its head bytes? (We constrain the
@@ -322,9 +347,9 @@ std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block)
 // transcription. The literary unit (the book's bytes) and the coin (BAB) are
 // different units; we do not force them equal, the amount only scales with the
 // count.
-CAmount CanonIssuance(const std::vector<unsigned char>& reg)
+CAmount CanonIssuance(const CanonState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg)
 {
-    return (CAmount)CanonExpectedSlice(reg).size() * COIN;
+    return (CAmount)CanonExpectedSlice(in, novel, reg).size() * COIN;
 }
 
 // Mortal Ledger: the pace half of Proof of Quotation. The quotation half binds the

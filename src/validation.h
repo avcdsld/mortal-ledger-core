@@ -13,6 +13,7 @@
 #include <coins.h>
 #include <consensus/amount.h>
 #include <cuckoocache.h>
+#include <pow.h>
 #include <deploymentstatus.h>
 #include <kernel/chain.h>
 #include <kernel/chainparams.h>
@@ -63,6 +64,7 @@ namespace kernel {
 struct ChainstateRole;
 } // namespace kernel
 namespace node {
+class BlockManager;
 class SnapshotMetadata;
 } // namespace node
 namespace Consensus {
@@ -100,6 +102,12 @@ enum class SynchronizationState {
 extern const std::vector<std::string> CHECKLEVEL_DOC;
 
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams);
+
+/** Mortal Ledger: resolve the bytes of the active novel a CanonState refers to — the
+ *  genesis constant, or the coinbase registration of the block at source_height on
+ *  `pindex`'s branch (`pindex` is any block on that branch at or above source_height).
+ *  Empty if the state is inactive or the source block cannot be read. */
+std::vector<unsigned char> ResolveCanonNovel(const CanonState& state, const CBlockIndex* pindex, const Consensus::Params& params, node::BlockManager& blockman);
 
 bool FatalError(kernel::Notifications& notifications, BlockValidationState& state, const bilingual_str& message);
 

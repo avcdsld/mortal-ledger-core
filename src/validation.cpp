@@ -2292,6 +2292,24 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
 }
 
 
+// Mortal Ledger: resolve the bytes of the active novel a CanonState refers to. The
+// genesis novel is the consensus constant; a registered novel is read from the coinbase
+// of the block that installed it (at source_height on pindex's branch). Keeps the
+// per-index canon state small (an id + offset) — the bytes live on disk, read on demand.
+std::vector<unsigned char> ResolveCanonNovel(const CanonState& s, const CBlockIndex* pindex, const Consensus::Params& params, node::BlockManager& blockman)
+{
+    if (!s.active()) return {};
+    if (s.source_height == params.nMortalLedgerHeight) {
+        const std::string& g = CanonGenesisNovel();
+        return std::vector<unsigned char>(g.begin(), g.end());
+    }
+    const CBlockIndex* src = pindex ? pindex->GetAncestor(s.source_height) : nullptr;
+    if (!src) return {};
+    CBlock srcblock;
+    if (!blockman.ReadBlock(srcblock, *src)) return {};
+    return ExtractCanonRegistration(srcblock);
+}
+
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
  *  can fail if those validity checks fail (among other reasons). */
@@ -2345,15 +2363,23 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         return true;
     }
 
-    // Mortal Ledger: Proof of Quotation with OP_SOURCE succession. On real
-    // connection (not the unmined template, fJustCheck), the block hash must carry
-    // the next slice of the novel in its head bytes. If the active novel is
-    // exhausted, the block must register a successor in its coinbase; the slice is
-    // then read from that successor (succession), else no valid block exists
-    // (completion = death). The canon is advanced at the end on success.
-    if (!fJustCheck) {
-        const std::vector<unsigned char> reg = ExtractCanonRegistration(block);
-        const std::vector<unsigned char> slice = CanonExpectedSlice(reg);
+    // Mortal Ledger: per-block canon state (reorg-/reindex-safe). The state ENTERING
+    // this block is its parent's leaving state, folded by the fork-height rule; below the
+    // fork height H there is no canon. Compute it once here, enforce Proof of Quotation
+    // against it (and 写字本位 issuance below), then store the leaving state on the index.
+    // The active novel's bytes are resolved from the canon state (genesis or source block).
+    const CanonState canon_in = CanonEnter(pindex->nHeight,
+        pindex->pprev ? CanonState{pindex->pprev->m_canon_source_height, pindex->pprev->m_canon_offset} : CanonState{},
+        params.GetConsensus());
+    const std::vector<unsigned char> canon_reg = ExtractCanonRegistration(block);
+    const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, pindex, params.GetConsensus(), m_blockman);
+
+    // On real connection (not the unmined template, fJustCheck), the block hash must
+    // carry the next slice of the active novel in its head bytes. At a seam the slice is
+    // read from the successor the block registers in its coinbase (succession), else no
+    // valid block exists (completion = death).
+    if (!fJustCheck && canon_in.active()) {
+        const std::vector<unsigned char> slice = CanonExpectedSlice(canon_in, canon_novel, canon_reg);
         if (!HashCarriesSlice(block_hash, slice)) {
             return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-quotation", "block hash does not transcribe the novel");
         }
@@ -2624,12 +2650,12 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<SecondsDouble>(m_chainman.time_connect),
              Ticks<MillisecondsDouble>(m_chainman.time_connect) / m_chainman.num_blocks_total);
 
-    // Mortal Ledger: 写字本位. The coinbase may mint at most the bytes transcribed
-    // this block (CanonIssuance), read from the canon state and the successor (if
-    // any) registered in this block's coinbase. The canon is still at the pre-advance
-    // offset here (CanonAdvance runs at the end on success), so this is the slice
-    // this block carries.
-    CAmount blockReward = nFees + CanonIssuance(ExtractCanonRegistration(block));
+    // Mortal Ledger: 写字本位. At and after the fork height the coinbase may mint at most
+    // the bytes transcribed this block (CanonIssuance against the canon state computed
+    // above, i.e. the slice this block carries); below H the inherited subsidy applies.
+    CAmount blockReward = nFees + (canon_in.active()
+        ? CanonIssuance(canon_in, canon_novel, canon_reg)
+        : GetBlockSubsidy(pindex->nHeight, params.GetConsensus()));
     if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
         state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
                       strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), blockReward));
@@ -2691,9 +2717,17 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         Ticks<std::chrono::nanoseconds>(time_5 - time_start)
     );
 
-    // Mortal Ledger: the block is fully connected; advance the canon by K bytes,
-    // installing the registered successor at the seam where the active novel ends.
-    CanonAdvance(ExtractCanonRegistration(block));
+    // Mortal Ledger: the block is fully connected; record the canon state LEAVING it on
+    // its index (a pure fold of the entering state, this block's height and registration).
+    // On a reorg this is simply read from pprev — nothing to undo — and CDiskBlockIndex
+    // persists it so a restart/reindex recomputes it identically.
+    if (canon_in.active()) {
+        const CanonState canon_out = CanonNext(canon_in, canon_novel, pindex->nHeight, canon_reg);
+        pindex->m_canon_source_height = canon_out.source_height;
+        pindex->m_canon_offset = canon_out.offset;
+        pindex->nStatus |= BLOCK_CANON;
+        m_blockman.m_dirty_blockindex.insert(pindex);
+    }
 
     return true;
 }

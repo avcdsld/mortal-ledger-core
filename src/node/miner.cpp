@@ -174,17 +174,25 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     // Add an output that spends the full coinbase reward.
     coinbaseTx.vout.resize(1);
     coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
-    // Mortal Ledger: OP_SOURCE succession + 写字本位 issuance. If the active novel
-    // is exhausted, this miner names the successor (open choice) and registers it in
-    // the coinbase scriptSig (tag "MLSR" + the successor's bytes). The coinbase mints
-    // exactly the bytes this block transcribes (CanonIssuance, given that
-    // registration), so the seam block mints for the successor's first byte too.
+    // Mortal Ledger: OP_SOURCE succession + 写字本位 issuance. The canon state ENTERING
+    // this template's block is the tip's leaving state, folded by the fork-height rule;
+    // resolve the active novel's bytes from it. If the active novel is exhausted the
+    // miner names a successor and registers it (the slice and issuance then come from
+    // it); below the fork height there is no canon. The successor rides the coinbase
+    // scriptSig (tag "MLSR" + bytes); the coinbase mints exactly the bytes this block
+    // transcribes (CanonIssuance), so the seam block mints for the successor's first byte.
+    const CanonState canon_in = CanonEnter(nHeight,
+        CanonState{pindexPrev->m_canon_source_height, pindexPrev->m_canon_offset},
+        chainparams.GetConsensus());
+    const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, pindexPrev, chainparams.GetConsensus(), m_chainstate.m_blockman);
     std::vector<unsigned char> reg;
-    if (CanonExpectedSlice({}).empty()) {
+    if (canon_in.active() && CanonExpectedSlice(canon_in, canon_novel, {}).empty()) {
         static const std::string kSuccessor = "Call me Ishmael."; // Melville, Moby-Dick
         reg.assign(kSuccessor.begin(), kSuccessor.end());
     }
-    const CAmount block_reward{nFees + CanonIssuance(reg)};
+    const CAmount block_reward{nFees + (canon_in.active()
+        ? CanonIssuance(canon_in, canon_novel, reg)
+        : GetBlockSubsidy(nHeight, chainparams.GetConsensus()))};
     coinbaseTx.vout[0].nValue = block_reward;
     coinbase_tx.block_reward_remaining = block_reward;
 

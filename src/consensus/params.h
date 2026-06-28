@@ -126,6 +126,17 @@ struct Params {
      * rules, so pre-fork history and other networks are untouched.
      */
     bool fMortalLedgerLWMA{false};
+    /**
+     * Mortal Ledger: the fork-activation height H. At and after this height the Mortal
+     * Ledger consensus rules fire: Proof of Quotation (the block hash must transcribe
+     * the canon), 写字本位 issuance (the coinbase mints the bytes written), and the
+     * per-block canon state carried on the block index. Below H the chain is inherited
+     * Bitcoin and carries no canon. -1 = never (the rules stay dormant). This is the
+     * single firing point; fMortalLedgerLWMA (the LWMA retarget / pace) and the replay
+     * id are meant to flip on in lockstep with H.
+     */
+    int nMortalLedgerHeight{-1};
+    bool IsMortalLedgerActive(int height) const { return nMortalLedgerHeight >= 0 && height >= nMortalLedgerHeight; }
     int64_t nPowTargetSpacing;
     int64_t nPowTargetTimespan;
     std::chrono::seconds PowTargetSpacing() const
