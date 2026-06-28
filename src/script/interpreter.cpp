@@ -59,6 +59,27 @@ static valtype MortalDigestBytes(unsigned char verb, const valtype& in)
     return out;
 }
 
+// Mortal Ledger: the LLM runtime hook (model C). The node installs a deterministic
+// INTEGER runtime (the SHA-256-pinned model); the interpreter calls it for
+// OP_DREAM/JUDGE/TRANSLATE. It must be a pure function of (model, verb, input, seed):
+// the same inputs give the same bytes on every node and architecture, so OP_JUDGE can
+// gate a spend. seed = the execution block's parent hash (g_mortal_block_seed). When
+// no runtime is installed the FNV stub above stands in (seed folded in), so tests and
+// pre-integration runs stay deterministic. Caching belongs to the runtime, not here:
+// script verification runs on many threads, so this path stays reentrant.
+std::function<valtype(uint8_t verb, const valtype& in, const uint256& seed)> g_mortal_llm;
+uint256 g_mortal_block_seed;
+
+static valtype MortalRunLLM(uint8_t verb, const valtype& in)
+{
+    if (g_mortal_llm) return g_mortal_llm(verb, in, g_mortal_block_seed);
+    valtype seeded;
+    seeded.reserve(32 + in.size());
+    seeded.insert(seeded.end(), g_mortal_block_seed.begin(), g_mortal_block_seed.end());
+    seeded.insert(seeded.end(), in.begin(), in.end());
+    return MortalDigestBytes(verb, seeded);
+}
+
 namespace {
 
 inline bool set_success(ScriptError* ret)
@@ -1088,20 +1109,21 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 case OP_DREAM:
                 case OP_TRANSLATE:
                 {
-                    // (in -- out)  bounded LLM reading of the input (model C stub)
+                    // (in -- out)  bounded LLM reading of the input, through the runtime
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     valtype& vch = stacktop(-1);
-                    vch = MortalDigestBytes(opcode == OP_DREAM ? 'D' : 'T', vch);
+                    vch = MortalRunLLM(opcode == OP_DREAM ? 'D' : 'T', vch);
                 }
                 break;
 
                 case OP_JUDGE:
                 {
-                    // (in -- 0|1)  a one-bit verdict on the fragment (model C stub)
+                    // (in -- 0|1)  a one-bit verdict on the fragment, through the runtime
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    const bool verdict = MortalFnv('J', stacktop(-1)) & 1;
+                    const valtype out = MortalRunLLM('J', stacktop(-1));
+                    const bool verdict = !out.empty() && (out[0] & 1);
                     popstack(stack);
                     stack.push_back(verdict ? vchTrue : vchFalse);
                 }

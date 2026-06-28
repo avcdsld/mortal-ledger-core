@@ -39,6 +39,15 @@ extern std::function<std::vector<unsigned char>(int64_t)> g_mortal_snippet; //!<
  *  The node sets it once past the fork height; default false = inherited Bitcoin. */
 extern bool g_mortal_forkid;
 
+/** Mortal Ledger: LLM runtime hook (model C) for OP_DREAM/JUDGE/TRANSLATE. The node
+ *  installs a deterministic integer runtime (the SHA-256-pinned model). It must be a
+ *  pure function of (model, verb, input, seed) so OP_JUDGE can gate a spend. seed =
+ *  the execution block's parent hash (g_mortal_block_seed). Unset = a built-in stub.
+ *  The hook must be reentrant (script verification runs on many threads); any caching
+ *  lives in the runtime. */
+extern std::function<std::vector<unsigned char>(uint8_t verb, const std::vector<unsigned char>& in, const uint256& seed)> g_mortal_llm;
+extern uint256 g_mortal_block_seed;
+
 /** Signature hash types/flags */
 enum
 {
