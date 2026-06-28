@@ -1835,15 +1835,19 @@ PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxM
 
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
 {
-    int halvings = nHeight / consensusParams.nSubsidyHalvingInterval;
-    // Force block reward to zero when right shift is undefined.
-    if (halvings >= 64)
-        return 0;
-
-    CAmount nSubsidy = 50 * COIN;
-    // Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
-    nSubsidy >>= halvings;
-    return nSubsidy;
+    // Mortal Ledger: 写字本位 (transcription standard). The coinbase no longer
+    // mints a halving money subsidy. It mints BAB in PROPORTION to the bytes of
+    // the novel transcribed this block (rate: 1 BAB per byte). The literary count
+    // (bytes/characters of the book) and the coin (BAB) are different units; there
+    // is no reason to force them equal, so the amount is decoupled from the raw
+    // byte count and just scales with it. At the writing granularity k this is a
+    // flat k BAB per block (less on the final partial block; the exact bytes come
+    // from canon state once that is wired in). No halving, no fixed cap. Supply
+    // grows only with transcription and ends at death (canon exhausted, no
+    // successor). The inherited Bitcoin supply predates the fork and is untouched.
+    const int   BYTES_PER_BLOCK = 3;     // writing granularity k (demo; calibrated on the Pi)
+    const CAmount BAB_PER_BYTE  = COIN;  // 1 BAB per transcribed byte
+    return BYTES_PER_BLOCK * BAB_PER_BYTE;
 }
 
 CoinsViews::CoinsViews(DBParams db_params, CoinsViewOptions options)
