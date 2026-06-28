@@ -122,10 +122,12 @@ public:
          * The characters are rarely used upper ASCII, not valid as UTF-8, and produce
          * a large 32-bit integer with any alignment.
          */
-        pchMessageStart[0] = 0xf9;
-        pchMessageStart[1] = 0xbe;
-        pchMessageStart[2] = 0xb4;
-        pchMessageStart[3] = 0xd9;
+        // Mortal Ledger: the fork's own message start, so the network can never
+        // connect to Bitcoin's. "MORT" (mort = death). Bitcoin's was f9 be b4 d9.
+        pchMessageStart[0] = 'M';
+        pchMessageStart[1] = 'O';
+        pchMessageStart[2] = 'R';
+        pchMessageStart[3] = 'T';
         nDefaultPort = 8333;
         nPruneAfterHeight = 100000;
         m_assumed_blockchain_size = 856;
@@ -150,13 +152,15 @@ public:
         vSeeds.emplace_back("seed.bitcoin.wiz.biz."); // Jason Maurice
         vSeeds.emplace_back("seed.mainnet.achownodes.xyz."); // Ava Chow, only supports x1, x5, x9, x49, x809, x849, xd, x400, x404, x408, x448, xc08, xc48, x40c
 
-        base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,0);
-        base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,5);
-        base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,128);
-        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x88, 0xB2, 0x1E};
-        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x88, 0xAD, 0xE4};
+        // Mortal Ledger: its own address bytes, so a Bitcoin address fails here and
+        // vice versa. P2PKH version 0x4d ('M') instead of Bitcoin's 0x00.
+        base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,77);
+        base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,78);
+        base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,205);
+        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x4d, 0x4c, 0x1e};
+        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x4d, 0x4c, 0xe4};
 
-        bech32_hrp = "bc";
+        bech32_hrp = "ml";
 
         vFixedSeeds = std::vector<uint8_t>(std::begin(chainparams_seed_main), std::end(chainparams_seed_main));
 
@@ -596,10 +600,11 @@ public:
         consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
 
-        pchMessageStart[0] = 0xfa;
-        pchMessageStart[1] = 0xbf;
-        pchMessageStart[2] = 0xb5;
-        pchMessageStart[3] = 0xda;
+        // Mortal Ledger regtest: its own message start (Bitcoin regtest was fa bf b5 da).
+        pchMessageStart[0] = 'm';
+        pchMessageStart[1] = 'o';
+        pchMessageStart[2] = 'r';
+        pchMessageStart[3] = 't';
         nDefaultPort = 18444;
         nPruneAfterHeight = opts.fastprune ? 100 : 1000;
         m_assumed_blockchain_size = 0;
@@ -672,13 +677,14 @@ public:
             .dTxRate = 0.001, // Set a non-zero rate to make it testable
         };
 
-        base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,111);
-        base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,196);
-        base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,239);
+        // Mortal Ledger regtest: its own address bytes (Bitcoin regtest used 111/196/239).
+        base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,110);
+        base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,195);
+        base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,238);
         base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x35, 0x87, 0xCF};
         base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
 
-        bech32_hrp = "bcrt";
+        bech32_hrp = "mlrt";
 
         // Copied from Testnet4.
         m_headers_sync_params = HeadersSyncParams{

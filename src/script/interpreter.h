@@ -34,6 +34,11 @@ extern int64_t g_mortal_ttl;          //!< the machine's remaining life
 extern int64_t g_mortal_source_left;  //!< the active novel's remaining bytes
 extern std::function<std::vector<unsigned char>(int64_t)> g_mortal_snippet; //!< height -> fragment
 
+/** Mortal Ledger: replay protection. When true, a fork id is folded into the
+ *  signature hash so signatures do not transfer between this chain and Bitcoin.
+ *  The node sets it once past the fork height; default false = inherited Bitcoin. */
+extern bool g_mortal_forkid;
+
 /** Signature hash types/flags */
 enum
 {

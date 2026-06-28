@@ -26,6 +26,20 @@ int64_t g_mortal_ttl = 0;          // the machine's remaining life (only falls)
 int64_t g_mortal_source_left = 0;  // the active novel's remaining bytes (only falls until a successor)
 std::function<std::vector<unsigned char>(int64_t)> g_mortal_snippet; // height -> transcribed fragment
 
+// Mortal Ledger: replay protection. When the fork is active a fork id is folded
+// into the signature hash type, so the signed digest differs from Bitcoin's: a
+// signature made for one chain is invalid on the other (and vice versa). Same
+// mechanism as BCH's SIGHASH_FORKID. A node sets g_mortal_forkid true once the
+// chain is past the fork height (demo-grade global, like the canon state); default
+// false keeps pre-fork and other networks bit-for-bit identical to Bitcoin.
+static const uint32_t MORTAL_FORKID = 0x4d4c00; // "ML.."
+bool g_mortal_forkid = false;
+static int32_t MortalHashType(int32_t nHashType)
+{
+    return g_mortal_forkid ? (int32_t)(((uint32_t)MORTAL_FORKID << 8) | ((uint32_t)nHashType & 0xff))
+                           : nHashType;
+}
+
 // Mortal Ledger: model C LLM stub. Deterministic function of the bytes given, so
 // every node agrees. The real node runs llama.cpp (INT4, --threads 1, seed = parent
 // hash); here a fixed FNV-1a transform stands in, varied per verb so DREAM, JUDGE
@@ -1828,8 +1842,8 @@ uint256 SignatureHash(const CScript& scriptCode, const T& txTo, unsigned int nIn
 
     // Try to compute using cached SHA256 midstate.
     if (sighash_cache && sighash_cache->Load(nHashType, scriptCode, ss)) {
-        // Add sighash type and hash.
-        ss << nHashType;
+        // Add sighash type and hash (Mortal Ledger: with the fork id folded in when active).
+        ss << MortalHashType(nHashType);
         return ss.GetHash();
     }
 
@@ -1884,8 +1898,9 @@ uint256 SignatureHash(const CScript& scriptCode, const T& txTo, unsigned int nIn
         sighash_cache->Store(nHashType, scriptCode, ss);
     }
 
-    // Add sighash type and hash.
-    ss << nHashType;
+    // Add sighash type and hash (Mortal Ledger: with the fork id folded in when active;
+    // txTmp/segwit body still use the plain nHashType so SINGLE/NONE/ANYONECANPAY are unchanged).
+    ss << MortalHashType(nHashType);
     return ss.GetHash();
 }
 
