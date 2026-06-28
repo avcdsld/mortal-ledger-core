@@ -196,6 +196,12 @@ bool CooldownIfHeadersAhead(ChainstateManager& chainman, KernelNotifications& ke
 void MortalLoadSuccessors(std::vector<std::vector<unsigned char>> successors);
 std::vector<std::vector<unsigned char>> MortalSuccessors();
 std::vector<unsigned char> MortalNextSuccessor(uint32_t novel_index);
+
+/** Mortal Ledger: the genesis novel this node supplies when mining the fork-height block H
+ *  (delivered on-chain via OP_SOURCE, pinned by consensus). Loaded from -mortalgenesis /
+ *  -mortalgenesisfile. Empty if unset (then this node cannot mine block H). */
+void MortalLoadGenesis(std::vector<unsigned char> novel);
+std::vector<unsigned char> MortalGenesisNovel();
 } // namespace node
 
 #endif // BITCOIN_NODE_MINER_H

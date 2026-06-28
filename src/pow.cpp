@@ -259,13 +259,6 @@ bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Par
 // constant, or the source block's coinbase) and passes them in.
 static const int CANON_K = 1; // writing granularity (demo; calibrated on the Pi)
 
-// The genesis novel: the canon the chain begins transcribing at the fork height H.
-const std::string& CanonGenesisNovel()
-{
-    static const std::string g = "旅への誘いが、次第に私の空想から消えて行つた。"; // 萩原朔太郎『猫町』
-    return g;
-}
-
 // The canon state ENTERING the block at `height`, given its parent's leaving state.
 // Below H: inactive (pre-fork is inherited Bitcoin). At H: the genesis novel begins.
 // Above H: inherit the parent's leaving state. Gated only by the fork height.

@@ -69,9 +69,6 @@ struct CanonState {
     bool active() const { return source_height >= 0; }
 };
 
-/** The genesis novel (consensus constant; the canon the chain begins at height H). */
-const std::string& CanonGenesisNovel();
-
 /** The canon state ENTERING the block at `height`, given its parent's leaving state.
  *  Below H: inactive. At H: the genesis novel begins. Above H: inherit the parent. */
 CanonState CanonEnter(int height, const CanonState& parent_after, const Consensus::Params& params);

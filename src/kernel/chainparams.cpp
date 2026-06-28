@@ -588,6 +588,11 @@ public:
         // Mortal Ledger: fire the fork at height 1 on regtest, so block 1 begins the
         // canon (the genesis novel) and the Proof-of-Quotation / 写字本位 demos run.
         consensus.nMortalLedgerHeight = 1;
+        // The genesis novel is delivered on-chain via an OP_SOURCE output at height 1 (not
+        // embedded); consensus pins its SHA-256. This is SHA-256("旅への誘いが、次第に私の
+        // 空想から消えて行つた。") — 萩原朔太郎『猫町』の冒頭. The block-1 miner supplies the
+        // text via -mortalgenesis. (uint256{} display form = byte-reversed SHA-256.)
+        consensus.mortalGenesisNovelHash = uint256{"32d483e15c2e912301d6a2682f6774519cbab84be332cab09046250bf687dd46"};
         consensus.BIP34Height = 1; // Always active unless overridden
         consensus.BIP34Hash = uint256();
         consensus.BIP65Height = 1;  // Always active unless overridden

@@ -498,6 +498,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-blocknotify=<cmd>", "Execute command when the best block changes (%s in cmd is replaced by block hash)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mortalsuccessor=<text>", "Mortal Ledger: append a successor novel (literal UTF-8 text) to this node's successor magazine. Repeatable; the magazine is consumed in the given order, one entry per completed novel. An empty magazine lets the chain starve at completion (no successor named). Local mining policy, not consensus.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mortalsuccessorfile=<path>", "Mortal Ledger: append a successor novel read from <path> (the whole file = one novel) to the successor magazine. Repeatable; appended after any -mortalsuccessor entries.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-mortalgenesis=<text>", "Mortal Ledger: the genesis novel (literal UTF-8) this node supplies when mining the fork-height block H. Delivered on-chain via OP_SOURCE and pinned by consensus. Needed only to mine block H.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-mortalgenesisfile=<path>", "Mortal Ledger: the genesis novel read from <path> (whole file), as -mortalgenesis.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 #endif
     argsman.AddArg("-blockreconstructionextratxn=<n>", strprintf("Extra transactions to keep in memory for compact block reconstructions (default: %u)", DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blocksonly", strprintf("Whether to reject transactions from network peers. Disables automatic broadcast and rebroadcast of transactions, unless the source peer has the 'forcerelay' permission. RPC transactions are not affected. (default: %u)", DEFAULT_BLOCKSONLY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -1442,6 +1444,25 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         }
         if (!mag.empty()) LogPrintf("Mortal Ledger: loaded %u successor novel(s) into the magazine\n", (unsigned)mag.size());
         node::MortalLoadSuccessors(std::move(mag));
+    }
+
+    // Mortal Ledger: the genesis novel this node delivers if it mines the fork height H
+    // (on-chain via OP_SOURCE, pinned by consensus). -mortalgenesis (literal) or
+    // -mortalgenesisfile (whole file). Only the block-H miner needs it.
+    {
+        std::vector<unsigned char> g;
+        if (args.IsArgSet("-mortalgenesisfile")) {
+            const std::string p = args.GetArg("-mortalgenesisfile", "");
+            std::ifstream f(fs::PathFromString(p), std::ios::binary | std::ios::ate);
+            if (!f.good()) return InitError(Untranslated(strprintf("-mortalgenesisfile: cannot read %s", p)));
+            std::streamsize sz = f.tellg(); f.seekg(0);
+            g.resize(sz > 0 ? (size_t)sz : 0);
+            if (sz > 0) f.read(reinterpret_cast<char*>(g.data()), sz);
+        } else if (args.IsArgSet("-mortalgenesis")) {
+            const std::string s = args.GetArg("-mortalgenesis", "");
+            g.assign(s.begin(), s.end());
+        }
+        if (!g.empty()) { LogPrintf("Mortal Ledger: genesis novel configured (%u bytes)\n", (unsigned)g.size()); node::MortalLoadGenesis(std::move(g)); }
     }
 
     auto opt_max_upload = ParseByteUnits(args.GetArg("-maxuploadtarget", DEFAULT_MAX_UPLOAD_TARGET), ByteUnit::M);

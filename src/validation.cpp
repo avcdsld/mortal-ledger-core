@@ -17,6 +17,7 @@
 #include <consensus/tx_check.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
+#include <crypto/sha256.h>
 #include <cuckoocache.h>
 #include <flatfile.h>
 #include <hash.h>
@@ -2300,10 +2301,6 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
 std::vector<unsigned char> ResolveCanonNovel(const CanonState& s, const CBlockIndex* pindex, const Consensus::Params& params, node::BlockManager& blockman)
 {
     if (!s.active()) return {};
-    if (s.source_height == params.nMortalLedgerHeight) {
-        const std::string& g = CanonGenesisNovel();
-        return std::vector<unsigned char>(g.begin(), g.end());
-    }
     const CBlockIndex* src = pindex ? pindex->GetAncestor(s.source_height) : nullptr;
     if (!src) return {};
     CBlock srcblock;
@@ -2373,13 +2370,29 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         pindex->pprev ? CanonState{pindex->pprev->m_canon_source_height, pindex->pprev->m_canon_offset, pindex->pprev->m_canon_index} : CanonState{},
         params.GetConsensus());
     const std::vector<unsigned char> canon_reg = ExtractCanonRegistration(block);
-    const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, pindex, params.GetConsensus(), m_blockman);
+    // The active novel's bytes: at the genesis seam (height H) the canon state's source IS
+    // this block, so the novel is the genesis OP_SOURCE carried here; otherwise it is resolved
+    // from the source block (genesis at H, or a successor seam) on disk.
+    const std::vector<unsigned char> canon_novel =
+        (canon_in.source_height == pindex->nHeight) ? canon_reg
+        : ResolveCanonNovel(canon_in, pindex, params.GetConsensus(), m_blockman);
 
-    // Mortal Ledger: an OP_SOURCE registration is valid only at a seam (the active novel is
-    // exhausted). This both defines succession and rate-limits the over-sized seam block to
-    // once per novel — it cannot appear mid-novel or pre-fork (so the size exemption above
-    // cannot be abused outside a seam).
-    if (!canon_reg.empty() && !(canon_in.active() && CanonExpectedSlice(canon_in, canon_novel, {}).empty()))
+    // Mortal Ledger: the genesis novel is delivered on-chain at height H via an OP_SOURCE
+    // output, pinned by consensus (its SHA-256 must equal mortalGenesisNovelHash). The bytes
+    // then live on-chain and are transcribed byte-by-byte like any novel.
+    if (canon_in.active() && pindex->nHeight == params.GetConsensus().nMortalLedgerHeight) {
+        uint256 gh;
+        CSHA256().Write(canon_reg.data(), canon_reg.size()).Finalize(gh.begin());
+        if (canon_reg.empty() || gh != params.GetConsensus().mortalGenesisNovelHash)
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-genesis-novel", "fork-height block must carry the pinned genesis novel via OP_SOURCE");
+    }
+
+    // Mortal Ledger: an OP_SOURCE registration is valid only at a seam — the genesis height H
+    // (delivering the genesis novel, checked above) or a successor seam (the active novel is
+    // exhausted). This defines succession and rate-limits the over-sized seam block to once
+    // per novel (it cannot appear mid-novel or pre-fork, so the size exemption is not abused).
+    if (!canon_reg.empty() && pindex->nHeight != params.GetConsensus().nMortalLedgerHeight &&
+        !(canon_in.active() && CanonExpectedSlice(canon_in, canon_novel, {}).empty()))
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "op-source-not-at-seam", "OP_SOURCE registration outside a seam");
 
     // Mortal Ledger: fire replay protection at the same height H. Once active, the

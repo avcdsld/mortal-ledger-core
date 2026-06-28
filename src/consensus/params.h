@@ -128,6 +128,10 @@ struct Params {
      */
     int nMortalLedgerHeight{-1};
     bool IsMortalLedgerActive(int height) const { return nMortalLedgerHeight >= 0 && height >= nMortalLedgerHeight; }
+    /** Mortal Ledger: SHA-256 of the genesis novel (the canon that begins at H). The block at
+     *  H must carry it in an OP_SOURCE output whose hash equals this; the bytes live on-chain
+     *  (delivered at H), not in the binary. Null when the fork is dormant (nMortalLedgerHeight<0). */
+    uint256 mortalGenesisNovelHash;
     int64_t nPowTargetSpacing;
     int64_t nPowTargetTimespan;
     std::chrono::seconds PowTargetSpacing() const
