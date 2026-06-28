@@ -117,6 +117,15 @@ struct Params {
       */
     bool enforce_BIP94;
     bool fPowNoRetargeting;
+    /**
+     * Mortal Ledger: when true, difficulty retargets every block by LWMA (Zawy's
+     * linearly weighted moving average) instead of Bitcoin's 2016-block window, and
+     * the proof-of-work magnitude is checked with the quotation bytes zeroed (the
+     * pace half of Proof of Quotation). The fork flips this on at height H, after
+     * resetting the target to Raspberry-Pi scale. Default false = inherited Bitcoin
+     * rules, so pre-fork history and other networks are untouched.
+     */
+    bool fMortalLedgerLWMA{false};
     int64_t nPowTargetSpacing;
     int64_t nPowTargetTimespan;
     std::chrono::seconds PowTargetSpacing() const

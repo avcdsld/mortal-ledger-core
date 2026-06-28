@@ -17,10 +17,21 @@
 #include <string>
 #include <vector>
 
+// Mortal Ledger: LWMA averaging window N (blocks). Per-block retarget responsive
+// enough for a tiny, volatile network without the death-spiral Bitcoin's 2016-block
+// window would cause here. Fixed consensus constant; calibrated on the Pi.
+static const int64_t MORTAL_LEDGER_LWMA_N = 60;
+
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)
 {
     assert(pindexLast != nullptr);
     unsigned int nProofOfWorkLimit = UintToArith256(params.powLimit).GetCompact();
+
+    // Mortal Ledger: after the fork, retarget every block by LWMA. Before there is a
+    // full window of post-fork history, hold the (reset) target.
+    if (params.fMortalLedgerLWMA && pindexLast->nHeight >= MORTAL_LEDGER_LWMA_N) {
+        return GetNextWorkRequiredLWMA(pindexLast, params);
+    }
 
     // Only change once per difficulty adjustment interval
     if ((pindexLast->nHeight+1) % params.DifficultyAdjustmentInterval() != 0)
@@ -88,6 +99,60 @@ unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nF
         bnNew = bnPowLimit;
 
     return bnNew.GetCompact();
+}
+
+// Mortal Ledger: LWMA-1 retarget (Zawy). Next target from the last N blocks,
+// weighting recent solve times most. Larger target = easier. This is the float
+// reference (node/difficulty_lwma.cpp) ported to Core's arith_uint256 fixed point.
+//
+//   next = avgTarget * SWS / (T * sumw)
+//   SWS  = Σ j·solvetime_j (j=1..N, oldest..newest), each solvetime clamped to [0,6T]
+//          and floored as a whole at sumw·T/3 (limits how fast difficulty can rise)
+//   sumw = N(N+1)/2,  k = sumw·T
+//
+// To stay within 256 bits we divide each window target by (k·N) before summing, so
+//   next = SWS · Σ(target_i/(k·N)) = (Σtarget_i/N)·SWS/k = avgTarget·SWS/(sumw·T).
+arith_uint256 CalculateNextWorkRequiredLWMA(const CBlockIndex* pindexLast, const Consensus::Params& params)
+{
+    const arith_uint256 bnPowLimit = UintToArith256(params.powLimit);
+    const int64_t T = params.nPowTargetSpacing;
+    const int64_t N = MORTAL_LEDGER_LWMA_N;
+
+    // Need a full window plus one prior block for the oldest solve time.
+    if (pindexLast == nullptr || pindexLast->nHeight < N) {
+        return bnPowLimit;
+    }
+
+    const int64_t sumw = N * (N + 1) / 2;
+    const int64_t k = sumw * T;
+    const arith_uint256 scale{(uint64_t)(k * N)};
+
+    int64_t SWS = 0;
+    arith_uint256 sumTarget = 0;
+    const int height = pindexLast->nHeight;
+    for (int64_t i = 0; i < N; i++) {
+        const int64_t bi = height - N + 1 + i;            // oldest .. newest
+        const CBlockIndex* cur = pindexLast->GetAncestor(bi);
+        const CBlockIndex* prev = pindexLast->GetAncestor(bi - 1);
+        int64_t solvetime = cur->GetBlockTime() - prev->GetBlockTime();
+        if (solvetime < 0) solvetime = 0;
+        if (solvetime > 6 * T) solvetime = 6 * T;
+        SWS += (i + 1) * solvetime;                       // newest carries the most weight
+        arith_uint256 target;
+        target.SetCompact(cur->nBits);
+        sumTarget += target / scale;
+    }
+    if (SWS < k / 3) SWS = k / 3;                          // floor: cap the rise rate
+
+    arith_uint256 bnNew = sumTarget;
+    bnNew *= (uint32_t)SWS;                                // SWS <= 6T·sumw fits in 32 bits
+    if (bnNew > bnPowLimit || bnNew == 0) bnNew = bnPowLimit;
+    return bnNew;
+}
+
+unsigned int GetNextWorkRequiredLWMA(const CBlockIndex* pindexLast, const Consensus::Params& params)
+{
+    return CalculateNextWorkRequiredLWMA(pindexLast, params).GetCompact();
 }
 
 // Check that on difficulty adjustments, the new difficulty does not increase
@@ -260,4 +325,17 @@ std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block)
 CAmount CanonIssuance(const std::vector<unsigned char>& reg)
 {
     return (CAmount)CanonExpectedSlice(reg).size() * COIN;
+}
+
+// Mortal Ledger: the pace half of Proof of Quotation. The quotation half binds the
+// LOW k internal bytes of the hash (the next bytes of the novel); the pace half
+// binds the MAGNITUDE. We zero the quotation bytes before the magnitude comparison
+// so the two predicates are exactly orthogonal: the expected work to mine a block is
+// ≈ 2^(8k) (find the quotation bytes) × (2^256 / target) (meet the pace). The target
+// moves every block via LWMA. At k=1 the zeroed byte shifts the 256-bit magnitude by
+// < 256, so this equals CheckProofOfWork in practice; zeroing makes the split exact.
+bool CheckPaceTarget(uint256 hash, unsigned int nBits, const Consensus::Params& params)
+{
+    for (int i = 0; i < CANON_K; i++) hash.begin()[i] = 0;
+    return CheckProofOfWorkImpl(hash, nBits, params);
 }

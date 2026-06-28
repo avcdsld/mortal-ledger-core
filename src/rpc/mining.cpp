@@ -146,10 +146,16 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t&
     // template already carries any successor registration in its coinbase (the block
     // assembler injects it when the active novel is exhausted), so read the slice
     // this block must transcribe from that registration, then grind until the hash
-    // satisfies BOTH the proof of work and the quotation slice.
+    // satisfies BOTH the pace (magnitude vs the LWMA target, quotation bytes zeroed)
+    // and the quotation slice (the next bytes of the novel).
+    const Consensus::Params& consensus = chainman.GetConsensus();
     const std::vector<unsigned char> slice = CanonExpectedSlice(ExtractCanonRegistration(block));
+    auto pace_ok = [&](const uint256& h) {
+        return consensus.fMortalLedgerLWMA ? CheckPaceTarget(h, block.nBits, consensus)
+                                           : CheckProofOfWork(h, block.nBits, consensus);
+    };
 
-    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !(CheckProofOfWork(block.GetHash(), block.nBits, chainman.GetConsensus()) && HashCarriesSlice(block.GetHash(), slice)) && !chainman.m_interrupt) {
+    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !(pace_ok(block.GetHash()) && HashCarriesSlice(block.GetHash(), slice)) && !chainman.m_interrupt) {
         ++block.nNonce;
         --max_tries;
     }
