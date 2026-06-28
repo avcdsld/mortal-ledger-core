@@ -209,6 +209,13 @@ enum opcodetype
     // Opcode added by BIP 342 (Tapscript)
     OP_CHECKSIGADD = 0xba,
 
+    // Mortal Ledger: the creation opcode. Present in the vocabulary, but sealed.
+    // It would let the machine produce arbitrary text (create, not quote), so it
+    // is disabled the way Core disabled OP_CAT: fatal merely by appearing in a
+    // script, even in a branch that never runs. The work revives every opcode
+    // Core censored and, by its own hand, censors this one. See EvalScript.
+    OP_PROMPT = 0xbb,
+
     OP_INVALIDOPCODE = 0xff,
 };
 

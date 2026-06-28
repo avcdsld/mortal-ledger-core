@@ -149,6 +149,9 @@ std::string GetOpName(opcodetype opcode)
     // Opcode added by BIP 342 (Tapscript)
     case OP_CHECKSIGADD            : return "OP_CHECKSIGADD";
 
+    // Mortal Ledger: the sealed creation opcode
+    case OP_PROMPT                 : return "OP_PROMPT";
+
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 
     default:
