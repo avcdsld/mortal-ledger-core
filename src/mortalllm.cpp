@@ -196,10 +196,14 @@ std::vector<i64> forward_fixed(const std::vector<int>& toks, int order) {
 }
 int argmax64(const std::vector<i64>& v) { int b = 0; for (size_t i = 1; i < v.size(); i++) if (v[i] > v[b]) b = (int)i; return b; }
 
-// Decode the opcode input (u16 LE token ids) into a token list, clamped to VOCAB.
+// Decode the opcode input (u32 LE token ids) into a token list, clamped to VOCAB.
+// u32, not u16: Qwen3's vocabulary is 151936, which does not fit in 16 bits.
 std::vector<int> decode_tokens(const valtype& in) {
     std::vector<int> ids;
-    for (size_t i = 0; i + 1 < in.size(); i += 2) { int id = in[i] | (in[i + 1] << 8); if ((u64)id < VOCAB) ids.push_back(id); }
+    for (size_t i = 0; i + 3 < in.size(); i += 4) {
+        uint32_t id = (uint32_t)in[i] | ((uint32_t)in[i + 1] << 8) | ((uint32_t)in[i + 2] << 16) | ((uint32_t)in[i + 3] << 24);
+        if ((u64)id < VOCAB) ids.push_back((int)id);
+    }
     return ids;
 }
 
@@ -226,9 +230,12 @@ void MortalInstallLLM(const std::string& path, const std::string& expected_sha25
             int pred = argmax64(forward_fixed(ctx, 0));
             return valtype{(unsigned char)(pred == target ? 1 : 0)};
         }
-        // DREAM / TRANSLATE: the next greedy token id, as 2 bytes LE.
+        // DREAM / TRANSLATE: the next greedy token id, as 4 bytes LE (u32: Qwen3's
+        // vocabulary exceeds 16 bits). The node produces ONE token per call; a multi-
+        // token "dream" is this iterated by the caller.
         if (ids.empty()) return valtype{};
-        int a = argmax64(forward_fixed(ids, 0));
-        return valtype{(unsigned char)(a & 0xff), (unsigned char)((a >> 8) & 0xff)};
+        uint32_t a = (uint32_t)argmax64(forward_fixed(ids, 0));
+        return valtype{(unsigned char)(a & 0xff), (unsigned char)((a >> 8) & 0xff),
+                       (unsigned char)((a >> 16) & 0xff), (unsigned char)((a >> 24) & 0xff)};
     };
 }

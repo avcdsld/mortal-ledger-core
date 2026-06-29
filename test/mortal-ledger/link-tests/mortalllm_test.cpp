@@ -35,8 +35,8 @@ int main(int argc, char** argv)
     int pass = 0, total = 0;
     auto ck = [&](const char* n, bool c) { total++; if (c) pass++; printf("  [%s] %s\n", c ? "ok" : "FAIL", n); };
 
-    // Input = token ids as u16 LE: {5, 10, 3}.
-    valtype toks = {5, 0, 10, 0, 3, 0};
+    // Input = token ids as u32 LE: {5, 10, 3}.
+    valtype toks = {5, 0, 0, 0, 10, 0, 0, 0, 3, 0, 0, 0};
     CScript dream; dream << toks << OP_DREAM;
 
     // Before installing a model: the built-in FNV stub returns an 8-byte digest.
@@ -48,7 +48,7 @@ int main(int argc, char** argv)
     valtype real_out, real_out2;
     eval_top(dream, real_out);
     eval_top(dream, real_out2);
-    ck("after install OP_DREAM returns a 2-byte token id (real forward ran)", real_out.size() == 2);
+    ck("after install OP_DREAM returns a 4-byte token id (real forward ran)", real_out.size() == 4);
     ck("real OP_DREAM is deterministic (same input -> same token)", real_out == real_out2);
     ck("installing the model changed the result (stub != real)", real_out != stub_out);
 
