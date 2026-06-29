@@ -59,7 +59,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="path to the .mlm the node loads")
     ap.add_argument("--bin", default="./next_token", help="path to the built next_token helper")
-    ap.add_argument("--max-new", type=int, default=64)
+    ap.add_argument("--max-new", type=int, default=256,
+                    help="hard cap on generated tokens; generation stops earlier at <|im_end|>")
     ap.add_argument("--dream", help="space-separated words (e.g. the mined 12) to dream from")
     # The framing instruction for --dream. This is the candidate OP_DREAM template — the
     # text that would be pinned into consensus once chosen. Experiment with it here.
