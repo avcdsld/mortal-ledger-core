@@ -17,13 +17,15 @@ Setup:
 
 Use:
   python3 test/mortal-ledger/chat_integer.py --model qwen3-1.7b.mlm --bin ./next_token
+  # the words are the mined block's BIP39 mnemonic (hiragana for JA, or the English list):
   python3 test/mortal-ledger/chat_integer.py --model qwen3-1.7b.mlm --bin ./next_token \
-      --dream "猫 町 月 影 路地 風 灯 夢 二重 街路 既視 帰路"
+      --dream "あいこくしん あいさつ あかちゃん あきる あける あさい あさひ あしあと"
   python3 test/mortal-ledger/chat_integer.py --model toy.mlm --bin ./next_token --raw
 """
 import argparse
 import subprocess
 import sys
+import time
 
 
 def start_helper(bin_path, model):
@@ -59,7 +61,7 @@ def main():
     # The framing instruction for --dream. This is the candidate OP_DREAM template — the
     # text that would be pinned into consensus once chosen. Experiment with it here.
     ap.add_argument("--instruction",
-                    default="次の言葉をあなたに渡します。ここから想像して、夢の日記を書いてください",
+                    default="次の言葉をあなたに渡します。ここから想像して、日本語で短い夢の日記を書いてください",
                     help="framing instruction for --dream (the candidate OP_DREAM template)")
     ap.add_argument("--system", default="", help="optional system prompt")
     ap.add_argument("--think", action="store_true",
@@ -108,8 +110,12 @@ def main():
             sys.stdout.flush()
             shown = full
 
+        t0 = time.time()
         generate(p, ids, eos, args.max_new, on_token=show)
+        dt = time.time() - t0
         print()
+        if gen:
+            print(f"  [ {len(gen)} tokens in {dt:.1f}s | {len(gen) / dt:.2f} tok/s ]")
         return tok.decode(gen, skip_special_tokens=True)
 
     if args.dream:

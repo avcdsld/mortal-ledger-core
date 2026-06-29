@@ -17,12 +17,14 @@
 #include <script/interpreter.h> // g_mortal_llm, g_mortal_block_seed
 #include <uint256.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -154,11 +156,30 @@ i64 quant8(const std::vector<i64>& h, std::vector<i8>& xq) { i64 amax = 1; for (
         if (num >= 0) q = (i64)((num * 2 + amax) / (2 * amax)); else q = -(i64)(((-num) * 2 + amax) / (2 * amax));
         if (q > 127) q = 127; if (q < -127) q = -127; xq[i] = (i8)q; } return amax; }
 
+// Run fn(o) for o in [0,out) across hardware threads. Each output row is independent and
+// its reduction order is unchanged, so the result is bit-identical to the serial loop (and
+// across thread counts / architectures) — integer determinism is preserved. This is the
+// hot path (the matmuls, incl. the lm_head), so threading it is the main speedup.
+template <class F>
+void parallel_rows(u64 out, F&& fn) {
+    static const unsigned NT = [] { unsigned n = std::thread::hardware_concurrency(); return n ? n : 1u; }();
+    if (NT == 1 || out < 512) { for (u64 o = 0; o < out; o++) fn(o); return; }
+    unsigned nt = (unsigned)std::min<u64>(NT, out);
+    std::vector<std::thread> ts; ts.reserve(nt);
+    u64 chunk = (out + nt - 1) / nt;
+    for (unsigned k = 0; k < nt; k++) {
+        u64 b = (u64)k * chunk, e = std::min<u64>(out, b + chunk);
+        if (b >= e) break;
+        ts.emplace_back([&fn, b, e] { for (u64 o = b; o < e; o++) fn(o); });
+    }
+    for (auto& th : ts) th.join();
+}
+
 std::vector<i64> matvec_fx(const MTensor& t, const std::vector<i64>& h, int order) {
     u64 in = t.dims[0], out = t.q.size() / in; std::vector<i8> xq; i64 amax = quant8(h, xq);
     std::vector<i64> y(out); i128 den = (i128)127 << 24;
-    for (u64 o = 0; o < out; o++) { i32 acc = idot(&t.q[o * in], xq.data(), in, order);
-        i128 num = (i128)acc * (i128)t.scale[o] * (i128)amax; y[o] = (i64)(num / den); }
+    parallel_rows(out, [&](u64 o) { i32 acc = idot(&t.q[o * in], xq.data(), in, order);
+        i128 num = (i128)acc * (i128)t.scale[o] * (i128)amax; y[o] = (i64)(num / den); });
     return y; }
 
 std::vector<i64> forward_fixed(const std::vector<int>& toks, int order) {
