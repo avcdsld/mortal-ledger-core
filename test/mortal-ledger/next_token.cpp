@@ -1,19 +1,19 @@
-// Persistent "next token" helper for chatting through the node's exact voice. It loads
-// the .mlm once and then, for each line of space-separated token ids on stdin, runs the
-// node's OP_DREAM path (g_mortal_llm('D', ...) = the integer fixed-point forward, argmax
-// = temperature 0) and prints the next token id. The model stays resident between calls,
-// so a driver (chat_integer.py) can generate greedily without reloading 1.7 GB per token.
+// Resident streaming generator for chatting through the node's exact voice. It loads the
+// .mlm once and drives a KV-cached dream session (the integer fixed-point forward, seeded
+// sampling for DREAM): bit-identical to the node's OP_DREAM, but each token costs ~one
+// position instead of reprocessing the whole prompt, so a long prompt no longer makes every
+// token slow. SLOW is still relative — this is the real integer voice, just no longer
+// quadratic in prompt length.
 //
-// This is the real consensus voice, not a fast proxy: every token is decided by the same
-// integer forward the node runs. It has no KV cache and naive kernels, so it is SLOW
-// (tens of seconds to minutes per token on the full model) — that slowness is the point.
+// Protocol (line-based, one token per reply):
+//   "<id id id ...>"  -> start a new dream from this prompt; reply with the first token
+//   "" (empty line)   -> continue the current dream; reply with the next token
 //
 // Build (from the Core root, after building bitcoind):
 //   g++ -std=c++20 -I src -I build/src test/mortal-ledger/next_token.cpp src/mortalllm.cpp \
 //       <libbitcoin_consensus/crypto/util/common + univalue + secp256k1> -o next_token
-//   ./next_token qwen3-1.7b.mlm     # then feed "id id id\n" -> prints next id
+//   ./next_token qwen3-1.7b.mlm [seed-hex]
 #include <mortalllm.h>
-#include <script/interpreter.h> // g_mortal_llm
 #include <uint256.h>
 
 #include <cstdio>
@@ -21,8 +21,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
-using valtype = std::vector<unsigned char>;
 
 int main(int argc, char** argv)
 {
@@ -34,7 +32,7 @@ int main(int argc, char** argv)
         return 2;
     }
     // The "block" seed: the same words with a different seed dream a different (but exactly
-    // reproducible) dream. JUDGE ignores it; DREAM samples from it.
+    // reproducible) dream. JUDGE would ignore it; DREAM samples from it.
     uint256 seed;
     if (argc > 2) {
         std::string h = argv[2];
@@ -43,19 +41,21 @@ int main(int argc, char** argv)
         if (auto o = uint256::FromHex(h)) seed = *o;
     }
     std::fprintf(stderr, "next_token: model loaded; ready (seed=%s)\n", seed.GetHex().c_str());
+
+    MortalDreamSession* sess = nullptr;
     std::string line;
     while (std::getline(std::cin, line)) {
-        std::vector<unsigned int> ids;
+        std::vector<int> ids;
         std::istringstream ss(line);
         long id;
-        while (ss >> id) if (id >= 0) ids.push_back((unsigned int)id);
-        if (ids.empty()) { std::cout << -1 << "\n" << std::flush; continue; }
-        valtype in;
-        for (unsigned int t : ids) { in.push_back(t & 0xff); in.push_back((t >> 8) & 0xff); in.push_back((t >> 16) & 0xff); in.push_back((t >> 24) & 0xff); }
-        valtype out = g_mortal_llm('D', in, seed);
-        if (out.size() < 4) { std::cout << -1 << "\n" << std::flush; continue; }
-        unsigned int nt = (unsigned)out[0] | ((unsigned)out[1] << 8) | ((unsigned)out[2] << 16) | ((unsigned)out[3] << 24);
-        std::cout << nt << "\n" << std::flush;
+        while (ss >> id) if (id >= 0) ids.push_back((int)id);
+        if (!ids.empty()) { // new prompt -> reset the session
+            if (sess) MortalDreamEnd(sess);
+            sess = MortalDreamBegin(ids, seed);
+        }
+        if (!sess) { std::cout << -1 << "\n" << std::flush; continue; }
+        std::cout << MortalDreamNext(sess) << "\n" << std::flush;
     }
+    if (sess) MortalDreamEnd(sess);
     return 0;
 }

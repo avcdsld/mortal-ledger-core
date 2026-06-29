@@ -321,3 +321,71 @@ void MortalInstallLLM(const std::string& path, const std::string& expected_sha25
                        (unsigned char)((a >> 16) & 0xff), (unsigned char)((a >> 24) & 0xff)};
     };
 }
+
+// ---- KV-cached streaming generation ------------------------------------------------
+// step() is forward_fixed for ONE position, reusing cached K/V for the past. The cached
+// values are exactly what the stateless forward recomputes, so the logits are bit-identical
+// — but each token costs ~one position instead of reprocessing the whole prompt. The seeded
+// sample uses pos (= the stateless path's input length) so the dream a session produces is
+// identical to iterating the node's OP_DREAM.
+struct MortalDreamSession {
+    uint64_t seed_base{0};
+    int pos{0};
+    std::vector<std::vector<std::vector<i64>>> Kc, Vc; // [layer][pos][N_KV*HD]
+    std::vector<i64> logits;
+
+    void step(int tok) {
+        build_rope(pos + 1);
+        i64 sqrt_hd_q16 = (i64)isqrt_u64((u64)HD << 32); if (!sqrt_hd_q16) sqrt_hd_q16 = 1;
+        i64 attn_scale = ((i64)1 << 32) / sqrt_hd_q16;
+        const MTensor& emb = W("token_embd.weight"); u64 ein = emb.dims[0];
+        std::vector<i64> h(D);
+        { const i8* row = &emb.q[(u64)tok * ein]; i64 sc = emb.scale[tok];
+          for (int i = 0; i < D; i++) h[i] = ((i64)row[i] * sc) >> 8; }
+        for (int l = 0; l < N_LAYER; l++) {
+            std::string p = "blk." + std::to_string(l) + ".";
+            const std::vector<i32>& an = W(p + "attn_norm.weight").q16;
+            const std::vector<i32>& qn = W(p + "attn_q_norm.weight").q16;
+            const std::vector<i32>& kn = W(p + "attn_k_norm.weight").q16;
+            const std::vector<i32>& fn = W(p + "ffn_norm.weight").q16;
+            std::vector<i64> x = h; rmsnorm_fx(x, an);
+            std::vector<i64> q = matvec_fx(W(p + "attn_q.weight"), x, 0);
+            std::vector<i64> k = matvec_fx(W(p + "attn_k.weight"), x, 0);
+            std::vector<i64> v = matvec_fx(W(p + "attn_v.weight"), x, 0);
+            for (int hh = 0; hh < N_HEAD; hh++) { std::vector<i64> hv(q.begin() + hh * HD, q.begin() + hh * HD + HD); rmsnorm_fx(hv, qn); std::copy(hv.begin(), hv.end(), q.begin() + hh * HD); rope_fx(q, hh * HD, pos); }
+            for (int hh = 0; hh < N_KV; hh++) { std::vector<i64> hv(k.begin() + hh * HD, k.begin() + hh * HD + HD); rmsnorm_fx(hv, kn); std::copy(hv.begin(), hv.end(), k.begin() + hh * HD); rope_fx(k, hh * HD, pos); }
+            Kc[l].push_back(k); Vc[l].push_back(v);
+            const int T = (int)Kc[l].size();
+            std::vector<i64> ctx(N_HEAD * HD);
+            for (int hh = 0; hh < N_HEAD; hh++) { int kv = hh / (N_HEAD / N_KV);
+                std::vector<i64> sc(T); i64 mx = INT64_MIN;
+                for (int t = 0; t < T; t++) { i128 d = 0; for (int i = 0; i < HD; i++) d += (i128)q[hh * HD + i] * Kc[l][t][kv * HD + i]; i64 dq = (i64)(d >> FXB);
+                    i64 sq = ((i128)dq * attn_scale) >> FXB; sc[t] = sq; if (sq > mx) mx = sq; }
+                i64 den = 0; for (int t = 0; t < T; t++) { sc[t] = fxexp_neg(sc[t] - mx); den += sc[t]; } if (!den) den = 1;
+                for (int i = 0; i < HD; i++) { i128 acc = 0; for (int t = 0; t < T; t++) acc += (i128)sc[t] * Vc[l][t][kv * HD + i]; ctx[hh * HD + i] = (i64)(acc / den); } }
+            std::vector<i64> o = matvec_fx(W(p + "attn_output.weight"), ctx, 0); for (int i = 0; i < D; i++) h[i] += o[i];
+            std::vector<i64> x2 = h; rmsnorm_fx(x2, fn);
+            std::vector<i64> g = matvec_fx(W(p + "ffn_gate.weight"), x2, 0), u = matvec_fx(W(p + "ffn_up.weight"), x2, 0);
+            std::vector<i64> a(FF); for (int i = 0; i < FF; i++) a[i] = ((i128)fxsilu(g[i]) * u[i]) >> FXB;
+            std::vector<i64> dd = matvec_fx(W(p + "ffn_down.weight"), a, 0); for (int i = 0; i < D; i++) h[i] += dd[i];
+        }
+        pos++;
+        std::vector<i64> xf = h; rmsnorm_fx(xf, W("output_norm.weight").q16);
+        logits = matvec_fx(W("token_embd.weight"), xf, 0);
+    }
+};
+
+MortalDreamSession* MortalDreamBegin(const std::vector<int>& prompt, const uint256& seed) {
+    auto* s = new MortalDreamSession();
+    s->Kc.resize(N_LAYER); s->Vc.resize(N_LAYER);
+    s->seed_base = seed.GetUint64(0) ^ seed.GetUint64(1) ^ seed.GetUint64(2) ^ seed.GetUint64(3);
+    for (int t : prompt) if ((u64)t < VOCAB) s->step(t);
+    return s;
+}
+int MortalDreamNext(MortalDreamSession* s) {
+    uint64_t sd = s->seed_base ^ ((uint64_t)s->pos * 0x9E3779B97F4A7C15ULL);
+    int tok = sample_logits(s->logits, sd);
+    s->step(tok);
+    return tok;
+}
+void MortalDreamEnd(MortalDreamSession* s) { delete s; }

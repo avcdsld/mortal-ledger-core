@@ -6,6 +6,9 @@
 #define BITCOIN_MORTALLLM_H
 
 #include <string>
+#include <vector>
+
+class uint256;
 
 /** Mortal Ledger: SHA-256 of the canonical voice model (qwen3-1.7b.mlm), produced by
  *  test/mortal-ledger/gguf_convert.cpp from the pinned Qwen3-1.7B-Q8_0 GGUF. The
@@ -27,5 +30,16 @@ inline constexpr const char* MORTAL_CANONICAL_MLM_SHA256 =
  *  with a toy model). Also throws std::runtime_error if the model cannot be read.
  *  Hyperparameters are derived from the model's tensor shapes. */
 void MortalInstallLLM(const std::string& mlm_path, const std::string& expected_sha256_hex = "");
+
+/** Mortal Ledger: a streaming dream generator with a KV cache. Bit-identical to iterating
+ *  the stateless forward, but each token costs ~one position instead of reprocessing the
+ *  whole prompt, so multi-token generation is roughly constant per token regardless of
+ *  prompt length. Tokens are seeded-sampled (same prompt + same seed -> same dream). A
+ *  model must be installed (MortalInstallLLM) first. Begin processes the prompt; each Next
+ *  returns the next token; End frees the session. */
+struct MortalDreamSession;
+MortalDreamSession* MortalDreamBegin(const std::vector<int>& prompt, const uint256& seed);
+int MortalDreamNext(MortalDreamSession* session);
+void MortalDreamEnd(MortalDreamSession* session);
 
 #endif // BITCOIN_MORTALLLM_H

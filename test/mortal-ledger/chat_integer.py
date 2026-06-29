@@ -34,22 +34,24 @@ def start_helper(bin_path, model, seed=""):
                             stdout=subprocess.PIPE, text=True, bufsize=1)
 
 
-def next_token(p, ids):
+def req(p, ids):
+    # Send a line (prompt ids, or empty to continue) and read one token. The helper keeps a
+    # KV cache, so the prompt is processed once and each continuation is ~one position.
     p.stdin.write(" ".join(str(i) for i in ids) + "\n")
     p.stdin.flush()
     return int(p.stdout.readline().strip())
 
 
-def generate(p, ids, eos_ids, max_new, on_token=None):
+def generate(p, prompt_ids, eos_ids, max_new, on_token=None):
     gen = []
+    nt = req(p, prompt_ids)            # prompt -> first token (cache built once)
     for _ in range(max_new):
-        nt = next_token(p, ids)
         if nt < 0 or nt in eos_ids:
             break
-        ids.append(nt)
         gen.append(nt)
         if on_token:
             on_token(nt)
+        nt = req(p, [])                # empty -> continue from the cache
     return gen
 
 
@@ -83,7 +85,7 @@ def main():
                 break
             if not line:
                 break
-            print("next:", next_token(p, [int(x) for x in line.split()]))
+            print("next:", req(p, [int(x) for x in line.split()]))
         return
 
     from transformers import AutoTokenizer

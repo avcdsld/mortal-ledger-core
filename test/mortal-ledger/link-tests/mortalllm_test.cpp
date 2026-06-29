@@ -72,6 +72,24 @@ int main(int argc, char** argv)
     }
     ck("OP_DREAM varies with the block seed (different blocks dream differently)", outs.size() >= 2);
 
+    // KV-cached generation must equal iterating the stateless OP_DREAM path bit-for-bit
+    // (the cache is just memoization of the same integer forward).
+    {
+        const uint256 s = seed_of(7);
+        std::vector<int> prompt = {5, 10, 3, 7, 2};
+        MortalDreamSession* sess = MortalDreamBegin(prompt, s);
+        std::vector<int> cached; for (int i = 0; i < 6; i++) cached.push_back(MortalDreamNext(sess));
+        MortalDreamEnd(sess);
+        std::vector<int> stateless_seq; std::vector<int> ids = prompt;
+        for (int i = 0; i < 6; i++) {
+            valtype in; for (int t : ids) { in.push_back(t & 0xff); in.push_back((t >> 8) & 0xff); in.push_back((t >> 16) & 0xff); in.push_back((t >> 24) & 0xff); }
+            valtype o = g_mortal_llm('D', in, s);
+            int tok = (unsigned)o[0] | ((unsigned)o[1] << 8) | ((unsigned)o[2] << 16) | ((unsigned)o[3] << 24);
+            stateless_seq.push_back(tok); ids.push_back(tok);
+        }
+        ck("KV-cached generation == stateless OP_DREAM (bit-exact)", cached == stateless_seq);
+    }
+
     // OP_JUDGE: (context.. target) -- 0|1, a stable one-bit verdict.
     CScript judge; judge << toks << OP_JUDGE;
     valtype j1, j2;
