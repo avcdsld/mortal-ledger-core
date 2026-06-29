@@ -692,7 +692,9 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
                    strprintf(
                        "Broadcast transactions submitted via sendrawtransaction RPC using short-lived "
                        "connections through the Tor or I2P networks, without putting them in the mempool first. "
-                       "Transactions submitted through the wallet are not affected by this option "
+                       "Transactions submitted through the wallet are not affected by this option. "
+                       "DISABLED in Mortal Ledger (forced off): Bitcoin Core 31.0 may leak the sender's IP; "
+                       "fixed upstream in 31.1. "
                        "(default: %u)",
                    DEFAULT_PRIVATE_BROADCAST),
                    ArgsManager::ALLOW_ANY,
@@ -845,6 +847,16 @@ void InitParameterInteraction(ArgsManager& args)
         if (!clearnet_reachable && args.SoftSetBoolArg("-dnsseed", false)) {
             LogInfo("parameter interaction: -onlynet excludes IPv4 and IPv6 -> setting -dnsseed=0\n");
         }
+    }
+
+    // Mortal Ledger: hard-disable -privatebroadcast. Bitcoin Core 31.0's private
+    // broadcast can leak the originator's IP to the receiving peer when the v2
+    // (encrypted) handshake is refused and it silently falls back to a cleartext
+    // connection (fixed upstream in 31.1). Until this fork rebases onto 31.1, force
+    // the feature off so it cannot be enabled via config.
+    if (args.GetBoolArg("-privatebroadcast", DEFAULT_PRIVATE_BROADCAST)) {
+        args.ForceSetArg("-privatebroadcast", "0");
+        LogWarning("Mortal Ledger: -privatebroadcast is disabled in this fork (Bitcoin Core 31.0 may leak the sender's IP; fixed upstream in 31.1). Ignoring.");
     }
 }
 
