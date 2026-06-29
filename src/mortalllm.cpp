@@ -13,6 +13,7 @@
 
 #include <mortalllm.h>
 
+#include <crypto/sha256.h>
 #include <script/interpreter.h> // g_mortal_llm, g_mortal_block_seed
 #include <uint256.h>
 
@@ -44,6 +45,19 @@ void rd(void* p, size_t sz, size_t n, FILE* f) {
 }
 u64 rd_u64(FILE* f) { u64 v; rd(&v, 8, 1, f); return v; }
 u32 rd_u32(FILE* f) { u32 v; rd(&v, 4, 1, f); return v; }
+
+std::string sha256_file(const char* path) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) throw std::runtime_error(std::string("mortalllm: cannot open ") + path);
+    CSHA256 h; std::vector<unsigned char> buf(1 << 20);
+    for (;;) { size_t n = std::fread(buf.data(), 1, buf.size(), f); if (n) h.Write(buf.data(), n);
+        if (n < buf.size()) { if (std::ferror(f)) { std::fclose(f); throw std::runtime_error("mortalllm: read error hashing model"); } break; } }
+    std::fclose(f);
+    unsigned char out[CSHA256::OUTPUT_SIZE]; h.Finalize(out);
+    static const char* x = "0123456789abcdef"; std::string s;
+    for (unsigned char c : out) { s += x[c >> 4]; s += x[c & 15]; }
+    return s;
+}
 
 void load_mlm(const char* path) {
     g_w.clear();
@@ -191,8 +205,14 @@ std::vector<int> decode_tokens(const valtype& in) {
 
 } // namespace
 
-void MortalInstallLLM(const std::string& path)
+void MortalInstallLLM(const std::string& path, const std::string& expected_sha256_hex)
 {
+    if (!expected_sha256_hex.empty()) {
+        const std::string got = sha256_file(path.c_str());
+        if (got != expected_sha256_hex)
+            throw std::runtime_error("mortalllm: model hash mismatch (got " + got + ", expected " + expected_sha256_hex +
+                                     "); refusing to run non-canonical weights (OP_JUDGE is consensus)");
+    }
     load_mlm(path.c_str());
     derive_hparams();
     g_mortal_llm = [](uint8_t verb, const valtype& in, const uint256& /*seed*/) -> valtype {

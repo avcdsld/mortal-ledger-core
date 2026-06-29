@@ -61,6 +61,13 @@ int main(int argc, char** argv)
     ck("OP_JUDGE returns a one-bit verdict (true/false)", is_bool);
     ck("OP_JUDGE is deterministic (consensus-safe lock)", j1 == j2);
 
+    // Hash pin: a wrong expected SHA-256 is rejected before loading (OP_JUDGE is
+    // consensus, so a node must run the exact pinned weights). Thrown before the model
+    // is touched, so the already-installed forward stays valid.
+    bool threw = false;
+    try { MortalInstallLLM(argv[1], "00"); } catch (const std::exception&) { threw = true; }
+    ck("a non-canonical model hash is rejected (pin enforced)", threw);
+
     printf("\n%d/%d  %s\n", pass, total, pass == total ? "PASS" : "FAIL");
     return pass == total ? 0 : 1;
 }

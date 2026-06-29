@@ -2079,8 +2079,12 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // once here (the .mlm is large); without -mortalmodel the built-in stub is used.
     if (const std::string mlm = args.GetArg("-mortalmodel", ""); !mlm.empty()) {
         LogInfo("Mortal Ledger: loading voice model %s\n", mlm);
+        // Off regtest, require the canonical pinned weights — OP_JUDGE is consensus, so a
+        // node must run the exact model or its verdict bits could diverge. Regtest allows
+        // any model (toy models for testing).
+        const std::string expected = chainparams.GetChainType() == ChainType::REGTEST ? "" : MORTAL_CANONICAL_MLM_SHA256;
         try {
-            MortalInstallLLM(mlm);
+            MortalInstallLLM(mlm, expected);
             LogInfo("Mortal Ledger: voice model installed; OP_JUDGE/DREAM/TRANSLATE now run the real Qwen\n");
         } catch (const std::exception& e) {
             return InitError(Untranslated(strprintf("Mortal Ledger: failed to load -mortalmodel: %s", e.what())));
