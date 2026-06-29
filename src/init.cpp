@@ -40,6 +40,7 @@
 #include <key.h>
 #include <logging.h>
 #include <mapport.h>
+#include <mortalllm.h>
 #include <net.h>
 #include <net_permissions.h>
 #include <net_processing.h>
@@ -500,6 +501,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-mortalsuccessorfile=<path>", "Mortal Ledger: append a successor novel read from <path> (the whole file = one novel) to the successor magazine. Repeatable; appended after any -mortalsuccessor entries.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mortalgenesis=<text>", "Mortal Ledger: the genesis novel (literal UTF-8) this node supplies when mining the fork-height block H. Delivered on-chain via OP_SOURCE and pinned by consensus. Needed only to mine block H.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mortalgenesisfile=<path>", "Mortal Ledger: the genesis novel read from <path> (whole file), as -mortalgenesis.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-mortalmodel=<path>", "Mortal Ledger: path to the pinned voice model (.mlm). When set, OP_JUDGE/OP_DREAM/OP_TRANSLATE run the real integer Qwen during script evaluation instead of the built-in stub. The forward is fully fixed-point (bit-identical across architectures), as required for OP_JUDGE to gate a spend.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 #endif
     argsman.AddArg("-blockreconstructionextratxn=<n>", strprintf("Extra transactions to keep in memory for compact block reconstructions (default: %u)", DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blocksonly", strprintf("Whether to reject transactions from network peers. Disables automatic broadcast and rebroadcast of transactions, unless the source peer has the 'forcerelay' permission. RPC transactions are not affected. (default: %u)", DEFAULT_BLOCKSONLY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -2071,6 +2073,19 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         });
     }
 #endif
+
+    // Mortal Ledger: install the voice model before any block connects, so OP_JUDGE/
+    // OP_DREAM/OP_TRANSLATE run the real integer Qwen during script evaluation. Loaded
+    // once here (the .mlm is large); without -mortalmodel the built-in stub is used.
+    if (const std::string mlm = args.GetArg("-mortalmodel", ""); !mlm.empty()) {
+        LogInfo("Mortal Ledger: loading voice model %s\n", mlm);
+        try {
+            MortalInstallLLM(mlm);
+            LogInfo("Mortal Ledger: voice model installed; OP_JUDGE/DREAM/TRANSLATE now run the real Qwen\n");
+        } catch (const std::exception& e) {
+            return InitError(Untranslated(strprintf("Mortal Ledger: failed to load -mortalmodel: %s", e.what())));
+        }
+    }
 
     std::vector<fs::path> vImportFiles;
     for (const std::string& strFile : args.GetArgs("-loadblock")) {

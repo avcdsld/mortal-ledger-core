@@ -40,6 +40,21 @@ for t in seal script mnemonic llmhook lwma lwmafire chainparams; do
   fi
 done
 
+# Voice model wiring: generate a tiny .mlm and prove OP_DREAM/OP_JUDGE run the real
+# integer forward (src/mortalllm.cpp), not the stub, and are deterministic.
+echo "== voice model wiring (mortalllm + toy .mlm) =="
+TOY=/tmp/ml_toy.mlm
+if ! python3 "$HERE/gen_toy_mlm.py" "$TOY" >/dev/null; then
+  fail "mortalllm (toy model generation)"
+elif ! "$CXX" -std=c++20 -I "$ROOT/src" -I "$BUILD/src" \
+        "$HERE/link-tests/mortalllm_test.cpp" "$ROOT/src/mortalllm.cpp" "${LINK_LIBS[@]}" \
+        -o /tmp/ml_mortalllmtest 2>/tmp/ml_mortalllm_cc.log; then
+  fail "mortalllm (compile)"; sed 's/^/    /' /tmp/ml_mortalllm_cc.log | head -8
+else
+  out="$(/tmp/ml_mortalllmtest "$TOY" 2>&1)"; rc=$?
+  [ $rc -eq 0 ] && pass "mortalllm (${out##*$'\n'})" || { fail "mortalllm"; echo "$out" | sed 's/^/    /'; }
+fi
+
 run_demo() { # $1=name  $2=grep-marker that must appear in output
   pkill -f "bitcoind -regtest" 2>/dev/null; sleep 1
   local out; out="$(bash "$HERE/demos/$1_demo.sh" 2>&1)"
