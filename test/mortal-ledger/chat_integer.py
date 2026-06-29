@@ -62,6 +62,8 @@ def main():
                     default="次の言葉をあなたに渡します。ここから想像して、夢の日記を書いてください",
                     help="framing instruction for --dream (the candidate OP_DREAM template)")
     ap.add_argument("--system", default="", help="optional system prompt")
+    ap.add_argument("--think", action="store_true",
+                    help="show the model's <think> reasoning (Qwen3 thinking mode; much longer/slower)")
     ap.add_argument("--tokenizer", default="Qwen/Qwen3-1.7B")
     ap.add_argument("--raw", action="store_true", help="enter token ids directly; no tokenizer")
     args = ap.parse_args()
@@ -88,7 +90,7 @@ def main():
     def apply_template(messages):
         try:
             return tok.apply_chat_template(messages, add_generation_prompt=True,
-                                           enable_thinking=False, tokenize=True)
+                                           enable_thinking=args.think, tokenize=True)
         except TypeError:
             return tok.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
 
@@ -96,11 +98,15 @@ def main():
         ids = list(apply_template(messages))
         print("  (generating — integer forward, temp 0, slow)", flush=True)
         gen = []
+        shown = ""  # text already emitted, for clean append-streaming of multi-byte chars
 
         def show(nt):
+            nonlocal shown
             gen.append(nt)
-            sys.stdout.write("\r  " + tok.decode(gen, skip_special_tokens=True))
+            full = tok.decode(gen, skip_special_tokens=True)  # <think>..</think> is plain text, still shown
+            sys.stdout.write(full[len(shown):])  # only the new suffix -> token-by-token stream
             sys.stdout.flush()
+            shown = full
 
         generate(p, ids, eos, args.max_new, on_token=show)
         print()
