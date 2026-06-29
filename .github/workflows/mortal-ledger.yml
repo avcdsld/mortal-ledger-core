@@ -35,7 +35,7 @@ jobs:
         run: >
           cmake -B build
           -DBUILD_TESTS=OFF -DBUILD_BENCH=OFF -DBUILD_GUI=OFF
-          -DWITH_ZMQ=OFF -DBUILD_WALLET_TOOL=OFF
+          -DWITH_ZMQ=OFF -DBUILD_WALLET_TOOL=OFF -DENABLE_IPC=OFF
 
       - name: Build bitcoind + bitcoin-cli
         run: cmake --build build --target bitcoind bitcoin-cli -j"$(nproc)"
