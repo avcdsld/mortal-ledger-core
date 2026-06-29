@@ -110,17 +110,25 @@ def main():
             nonlocal shown
             gen.append(nt)
             full = tok.decode(gen, skip_special_tokens=True)  # <think>..</think> is plain text, still shown
-            sys.stdout.write(full[len(shown):])  # only the new suffix -> token-by-token stream
-            sys.stdout.flush()
-            shown = full
+            # hold a trailing incomplete multi-byte char (decodes to U+FFFD) until the next
+            # token completes it, so the live stream never flashes a broken glyph.
+            stable = full[:-1] if full.endswith("�") else full
+            if len(stable) > len(shown):
+                sys.stdout.write(stable[len(shown):])  # new complete suffix -> token-by-token stream
+                sys.stdout.flush()
+                shown = stable
 
         t0 = time.time()
         generate(p, ids, eos, args.max_new, on_token=show)
         dt = time.time() - t0
+        full = tok.decode(gen, skip_special_tokens=True)
+        if len(full) > len(shown):           # flush whatever was held back at the end
+            sys.stdout.write(full[len(shown):])
+            sys.stdout.flush()
         print()
         if gen:
             print(f"  [ {len(gen)} tokens in {dt:.1f}s | {len(gen) / dt:.2f} tok/s ]")
-        return tok.decode(gen, skip_special_tokens=True)
+        return full
 
     if args.dream:
         words = args.dream.split()
