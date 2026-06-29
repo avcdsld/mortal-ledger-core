@@ -27,6 +27,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 namespace {
 
 using i8 = int8_t; using i32 = int32_t; using i64 = int64_t;
@@ -119,9 +123,31 @@ i64 fxsigmoid(i64 x) { if (x >= 0) { i64 e = fxexp_neg(-x); return (FX * FX) / (
 i64 fxsilu(i64 x) { return ((i128)x * fxsigmoid(x)) >> FXB; }
 u64 isqrt_u64(u64 n) { u64 x = 0, b = (u64)1 << 62; while (b > n) b >>= 2; while (b) { if (n >= x + b) { n -= x + b; x = (x >> 1) + b; } else x >>= 1; b >>= 2; } return x; }
 
-i32 idot(const i8* a, const i8* b, u64 k, int order) { i32 s = 0;
-    if (order == 0) for (u64 i = 0; i < k; i++) s += (i32)a[i] * b[i];
-    else if (order == 1) { for (i64 i = (i64)k - 1; i >= 0; i--) s += (i32)a[i] * b[i]; }
+// int8 dot, int32 exact accumulate. The order parameter only matters for the reference
+// determinism test (orders 1/2); the node always uses order 0. SIMD changes the grouping
+// of an integer sum, which is exact and order-independent, so every path below returns the
+// identical i32 (and thus bit-identical logits across architectures).
+i32 idot(const i8* a, const i8* b, u64 k, int order) {
+    if (order == 0) {
+#if defined(__ARM_NEON)
+        u64 i = 0; i32 s;
+#if defined(__ARM_FEATURE_DOTPROD)
+        int32x4_t acc = vdupq_n_s32(0);
+        for (; i + 16 <= k; i += 16) acc = vdotq_s32(acc, vld1q_s8(a + i), vld1q_s8(b + i));
+        s = vaddvq_s32(acc);
+#else
+        int32x4_t acc = vdupq_n_s32(0);
+        for (; i + 8 <= k; i += 8) acc = vpadalq_s16(acc, vmull_s8(vld1_s8(a + i), vld1_s8(b + i)));
+        s = vaddvq_s32(acc);
+#endif
+        for (; i < k; i++) s += (i32)a[i] * b[i];
+        return s;
+#else
+        i32 s = 0; for (u64 i = 0; i < k; i++) s += (i32)a[i] * b[i]; return s;
+#endif
+    }
+    i32 s = 0;
+    if (order == 1) { for (i64 i = (i64)k - 1; i >= 0; i--) s += (i32)a[i] * b[i]; }
     else { for (u64 i = 0; i < k; i += 2) s += (i32)a[i] * b[i]; for (u64 i = 1; i < k; i += 2) s += (i32)a[i] * b[i]; }
     return s; }
 
