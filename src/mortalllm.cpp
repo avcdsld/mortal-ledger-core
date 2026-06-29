@@ -243,6 +243,37 @@ std::vector<i64> forward_fixed(const std::vector<int>& toks, int order) {
 }
 int argmax64(const std::vector<i64>& v) { int b = 0; for (size_t i = 1; i < v.size(); i++) if (v[i] > v[b]) b = (int)i; return b; }
 
+// Pinned integer RNG (SplitMix64): deterministic, no libc, bit-identical on any platform.
+uint64_t splitmix64(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
+// Pinned dream temperature (Q16.16). Higher = wilder. Fixed so the dream is reproducible.
+const i64 MORTAL_DREAM_TEMP_Q16 = 65536; // 1.0
+
+// Deterministic seeded sample from integer logits: a fixed-point softmax over the whole
+// vocabulary, drawn with the pinned RNG. Same logits + same rng_seed -> same token; a
+// different seed -> a different token. All integer (fxexp_neg), no float/libm — so the
+// dream is deterministic and reproducible, yet varies by block (the seed is the block).
+int sample_logits(const std::vector<i64>& logits, uint64_t rng_seed) {
+    i64 m = logits[0]; for (i64 v : logits) if (v > m) m = v;
+    std::vector<i64> w(logits.size()); i64 total = 0;
+    for (size_t i = 0; i < logits.size(); i++) {
+        i64 d = logits[i] - m;                                       // <= 0, Q16.16
+        i64 dt = (i64)(((i128)d * FX) / MORTAL_DREAM_TEMP_Q16);       // logit/T, Q16.16
+        i64 e = fxexp_neg(dt);                                        // exp(dt), Q16.16
+        w[i] = e; total += e;
+    }
+    if (total <= 0) return argmax64(logits);
+    uint64_t r = splitmix64(rng_seed) % (uint64_t)total;
+    i64 cum = 0;
+    for (size_t i = 0; i < w.size(); i++) { cum += w[i]; if ((uint64_t)cum > r) return (int)i; }
+    return (int)w.size() - 1;
+}
+
 // Decode the opcode input (u32 LE token ids) into a token list, clamped to VOCAB.
 // u32, not u16: Qwen3's vocabulary is 151936, which does not fit in 16 bits.
 std::vector<int> decode_tokens(const valtype& in) {
@@ -266,7 +297,7 @@ void MortalInstallLLM(const std::string& path, const std::string& expected_sha25
     }
     load_mlm(path.c_str());
     derive_hparams();
-    g_mortal_llm = [](uint8_t verb, const valtype& in, const uint256& /*seed*/) -> valtype {
+    g_mortal_llm = [](uint8_t verb, const valtype& in, const uint256& seed) -> valtype {
         std::vector<int> ids = decode_tokens(in);
         if (verb == 'J') {
             // JUDGE: a one-bit verdict — does the model greedily predict the last token
@@ -277,11 +308,15 @@ void MortalInstallLLM(const std::string& path, const std::string& expected_sha25
             int pred = argmax64(forward_fixed(ctx, 0));
             return valtype{(unsigned char)(pred == target ? 1 : 0)};
         }
-        // DREAM / TRANSLATE: the next greedy token id, as 4 bytes LE (u32: Qwen3's
-        // vocabulary exceeds 16 bits). The node produces ONE token per call; a multi-
-        // token "dream" is this iterated by the caller.
+        // DREAM / TRANSLATE: the next token, as 4 bytes LE (u32: Qwen3's vocabulary exceeds
+        // 16 bits). NOT greedy — a deterministic seeded sample, so the same words dreamed in
+        // a different block (different seed) give a different dream, yet every dream is
+        // exactly reproducible. The RNG is seeded by the block (seed) folded with the input
+        // length, so each generated token draws fresh. Deterministic but not greedy.
         if (ids.empty()) return valtype{};
-        uint32_t a = (uint32_t)argmax64(forward_fixed(ids, 0));
+        uint64_t sd = seed.GetUint64(0) ^ seed.GetUint64(1) ^ seed.GetUint64(2) ^ seed.GetUint64(3);
+        sd ^= (uint64_t)ids.size() * 0x9E3779B97F4A7C15ULL;
+        uint32_t a = (uint32_t)sample_logits(forward_fixed(ids, 0), sd);
         return valtype{(unsigned char)(a & 0xff), (unsigned char)((a >> 8) & 0xff),
                        (unsigned char)((a >> 16) & 0xff), (unsigned char)((a >> 24) & 0xff)};
     };

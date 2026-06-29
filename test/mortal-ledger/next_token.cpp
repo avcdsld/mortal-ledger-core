@@ -26,14 +26,23 @@ using valtype = std::vector<unsigned char>;
 
 int main(int argc, char** argv)
 {
-    if (argc < 2) { std::fprintf(stderr, "usage: %s <model.mlm>\n", argv[0]); return 2; }
+    if (argc < 2) { std::fprintf(stderr, "usage: %s <model.mlm> [seed-hex]\n", argv[0]); return 2; }
     try {
         MortalInstallLLM(argv[1]); // tool: no hash enforcement (use any .mlm, incl. toy)
     } catch (const std::exception& e) {
         std::fprintf(stderr, "next_token: %s\n", e.what());
         return 2;
     }
-    std::fprintf(stderr, "next_token: model loaded; ready\n");
+    // The "block" seed: the same words with a different seed dream a different (but exactly
+    // reproducible) dream. JUDGE ignores it; DREAM samples from it.
+    uint256 seed;
+    if (argc > 2) {
+        std::string h = argv[2];
+        if (h.size() > 64) h = h.substr(0, 64);
+        h = std::string(64 - h.size(), '0') + h; // left-pad to 32 bytes
+        if (auto o = uint256::FromHex(h)) seed = *o;
+    }
+    std::fprintf(stderr, "next_token: model loaded; ready (seed=%s)\n", seed.GetHex().c_str());
     std::string line;
     while (std::getline(std::cin, line)) {
         std::vector<unsigned int> ids;
@@ -43,7 +52,7 @@ int main(int argc, char** argv)
         if (ids.empty()) { std::cout << -1 << "\n" << std::flush; continue; }
         valtype in;
         for (unsigned int t : ids) { in.push_back(t & 0xff); in.push_back((t >> 8) & 0xff); in.push_back((t >> 16) & 0xff); in.push_back((t >> 24) & 0xff); }
-        valtype out = g_mortal_llm('D', in, uint256{});
+        valtype out = g_mortal_llm('D', in, seed);
         if (out.size() < 4) { std::cout << -1 << "\n" << std::flush; continue; }
         unsigned int nt = (unsigned)out[0] | ((unsigned)out[1] << 8) | ((unsigned)out[2] << 16) | ((unsigned)out[3] << 24);
         std::cout << nt << "\n" << std::flush;

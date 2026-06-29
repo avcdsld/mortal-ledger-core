@@ -28,8 +28,9 @@ import sys
 import time
 
 
-def start_helper(bin_path, model):
-    return subprocess.Popen([bin_path, model], stdin=subprocess.PIPE,
+def start_helper(bin_path, model, seed=""):
+    argv = [bin_path, model] + ([seed] if seed else [])
+    return subprocess.Popen(argv, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, text=True, bufsize=1)
 
 
@@ -67,10 +68,11 @@ def main():
     ap.add_argument("--think", action="store_true",
                     help="show the model's <think> reasoning (Qwen3 thinking mode; much longer/slower)")
     ap.add_argument("--tokenizer", default="Qwen/Qwen3-1.7B")
+    ap.add_argument("--seed", default="", help="block seed (hex): same words + different seed -> different dream (DREAM only; JUDGE ignores it)")
     ap.add_argument("--raw", action="store_true", help="enter token ids directly; no tokenizer")
     args = ap.parse_args()
 
-    p = start_helper(args.bin, args.model)
+    p = start_helper(args.bin, args.model, args.seed)
 
     if args.raw:
         print("raw mode: enter token ids (space-separated), blank line to quit.")

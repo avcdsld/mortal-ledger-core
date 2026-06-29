@@ -15,9 +15,18 @@
 #include <script/script_error.h>
 
 #include <cstdio>
+#include <set>
+#include <string>
 #include <vector>
 
 using valtype = std::vector<unsigned char>;
+
+static uint256 seed_of(unsigned long long k)
+{
+    char buf[65];
+    std::snprintf(buf, sizeof buf, "%064llx", k);
+    return uint256::FromHex(buf).value_or(uint256{});
+}
 
 static bool eval_top(const CScript& s, valtype& top)
 {
@@ -45,12 +54,23 @@ int main(int argc, char** argv)
 
     MortalInstallLLM(argv[1]);
 
+    g_mortal_block_seed = seed_of(1);
     valtype real_out, real_out2;
     eval_top(dream, real_out);
     eval_top(dream, real_out2);
     ck("after install OP_DREAM returns a 4-byte token id (real forward ran)", real_out.size() == 4);
-    ck("real OP_DREAM is deterministic (same input -> same token)", real_out == real_out2);
+    ck("OP_DREAM is exactly reproducible for a fixed seed", real_out == real_out2);
     ck("installing the model changed the result (stub != real)", real_out != stub_out);
+
+    // Seeded variation: the same words dreamed under different block seeds give different
+    // (but each exactly reproducible) dreams. JUDGE, by contrast, ignores the seed.
+    std::set<std::string> outs;
+    for (unsigned long long k = 1; k <= 8; k++) {
+        g_mortal_block_seed = seed_of(k);
+        valtype o; eval_top(dream, o);
+        outs.insert(std::string(o.begin(), o.end()));
+    }
+    ck("OP_DREAM varies with the block seed (different blocks dream differently)", outs.size() >= 2);
 
     // OP_JUDGE: (context.. target) -- 0|1, a stable one-bit verdict.
     CScript judge; judge << toks << OP_JUDGE;
