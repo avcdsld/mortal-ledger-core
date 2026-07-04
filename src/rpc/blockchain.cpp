@@ -7,6 +7,9 @@
 
 #include <blockfilter.h>
 #include <chain.h>
+#include <mortaldream.h>
+#include <mortalllm.h>
+#include <pow.h>
 #include <chainparams.h>
 #include <chainparamsbase.h>
 #include <clientversion.h>
@@ -36,6 +39,7 @@
 #include <rpc/server.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
+#include <script/bip39_wordlists.h>
 #include <script/descriptor.h>
 #include <serialize.h>
 #include <streams.h>
@@ -3493,6 +3497,199 @@ return RPCHelpMan{
     };
 }
 
+static RPCHelpMan getblockdream()
+{
+    return RPCHelpMan{
+        "getblockdream",
+        "\nReturn the dream inscribed in a block (Mortal Ledger).\n"
+        "\nEach block carries one dream: the voice's reading of 12 BIP39-Japanese words drawn\n"
+        "from the PARENT hash and seeded by that same hash. The miner detokenizes it to UTF-8\n"
+        "text (pure C++, from the model's vocab) and inscribes the readable dream in an\n"
+        "unspendable coinbase output, so every node holds it as `text` — no model or tokenizer\n"
+        "needed to read it. The dream is data, not consensus — a block may carry none (e.g.\n"
+        "mined by a model-less node).\n",
+        {
+            {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The block hash"},
+        },
+        RPCResult{
+            RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::STR_HEX, "hash", "the block hash"},
+                {RPCResult::Type::NUM, "height", "the block height"},
+                {RPCResult::Type::BOOL, "present", "whether a dream is inscribed in this block"},
+                {RPCResult::Type::STR_HEX, "seed", "the dream seed = the parent block hash"},
+                {RPCResult::Type::ARR, "words", "the 12 BIP39-Japanese reference words the parent names",
+                    {{RPCResult::Type::STR, "", "a reference word"}}},
+                {RPCResult::Type::STR, "text", "the inscribed dream as UTF-8 text (empty if none)"},
+            }
+        },
+        RPCExamples{
+            HelpExampleCli("getblockdream", "\"00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09\"")
+          + HelpExampleRpc("getblockdream", "\"00000000c937983704a73af28acdec37b049d214adbda81d7e2a3dd146f6ed09\"")
+        },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    const uint256 hash(ParseHashV(request.params[0], "blockhash"));
+    ChainstateManager& chainman = EnsureAnyChainman(request.context);
+
+    const CBlockIndex* pblockindex;
+    {
+        LOCK(cs_main);
+        pblockindex = chainman.m_blockman.LookupBlockIndex(hash);
+    }
+    if (!pblockindex) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+
+    const CBlock block = GetBlockChecked(chainman.m_blockman, *pblockindex);
+    const auto dreams = ExtractDreamInscriptions(block);
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("hash", pblockindex->GetBlockHash().GetHex());
+    result.pushKV("height", pblockindex->nHeight);
+    result.pushKV("present", !dreams.empty());
+
+    // The dream is seeded by, and its 12 reference words drawn from, the PARENT hash — so a
+    // block's dream is a pure function of the already-fixed parent (no circular hash dep).
+    uint256 seed;
+    UniValue words(UniValue::VARR);
+    if (pblockindex->pprev) {
+        seed = pblockindex->pprev->GetBlockHash();
+        for (int idx : MortalDreamWordIndices(seed)) words.push_back(std::string(BIP39_WORDS_JA[idx]));
+    }
+    result.pushKV("seed", seed.GetHex());
+    result.pushKV("words", std::move(words));
+
+    // The dream is stored as UTF-8 text (the node detokenized it at mining time), so reading is
+    // free here — no model, no tokenizer.
+    result.pushKV("text", dreams.empty() ? std::string() : std::string(dreams[0].begin(), dreams[0].end()));
+    return result;
+},
+    };
+}
+
+
+static RPCHelpMan getnovel()
+{
+    return RPCHelpMan{
+        "getnovel",
+        "\nReturn the state of the novel being transcribed (Mortal Ledger).\n"
+        "\nThe chain transcribes a novel one CHARACTER per block (Proof of Quotation). This returns a\n"
+        "bounded TAIL of the text written so far, the single character currently being\n"
+        "transcribed, and progress counters — never the whole (multi-MB) novel. For the full\n"
+        "text, read the OP_SOURCE coinbase output via getblock.\n",
+        {
+            {"chars", RPCArg::Type::NUM, RPCArg::Default{200}, "how many trailing characters of the written text to return"},
+        },
+        RPCResult{
+            RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::BOOL, "active", "whether transcription is active (post-fork)"},
+                {RPCResult::Type::NUM, "index", "the active novel's ordinal (0 = the genesis novel)"},
+                {RPCResult::Type::NUM, "offset", "bytes of the active novel transcribed so far"},
+                {RPCResult::Type::NUM, "total", "the active novel's length in bytes"},
+                {RPCResult::Type::NUM, "chars", "characters transcribed so far (one per block)"},
+                {RPCResult::Type::STR, "tail", "the last <chars> complete characters written"},
+                {RPCResult::Type::STR, "current", "the character currently being transcribed (empty once the novel is complete)"},
+                {RPCResult::Type::BOOL, "done", "whether the active novel is fully transcribed (completion = death)"},
+            }
+        },
+        RPCExamples{
+            HelpExampleCli("getnovel", "") + HelpExampleCli("getnovel", "300") + HelpExampleRpc("getnovel", "300")
+        },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    int want = request.params[0].isNull() ? 200 : request.params[0].getInt<int>();
+    if (want < 0) want = 0;
+    ChainstateManager& chainman = EnsureAnyChainman(request.context);
+
+    UniValue r(UniValue::VOBJ);
+    LOCK(cs_main);
+    const CBlockIndex* tip = chainman.ActiveChain().Tip();
+    const NovelState st{tip ? tip->m_novel_source_height : -1,
+                        tip ? tip->m_novel_offset : (uint64_t)0,
+                        tip ? tip->m_novel_index : (uint32_t)0};
+    if (!tip || !st.active()) { r.pushKV("active", false); return r; }
+
+    // The active novel's bytes (genesis constant or the source block's coinbase), resolved on
+    // demand; we only ever slice a small window from it, so the multi-MB text never leaves here.
+    const std::vector<unsigned char> novel = ResolveNovel(st, tip, chainman.GetConsensus(), chainman.m_blockman);
+    const uint64_t total = novel.size();
+    const uint64_t off = std::min<uint64_t>(st.offset, total);
+
+    const auto cont = [](unsigned char c) { return (c & 0xC0) == 0x80; };       // UTF-8 continuation byte
+    const auto clen = [](unsigned char c) -> uint64_t { return c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4; };
+
+    // The last complete-character boundary within the written bytes [0, off): a multi-byte char
+    // straddling `off` is still being written, so it is excluded from `tail` and reported as `current`.
+    uint64_t k = off;
+    while (k > 0 && cont(novel[k - 1])) k--;                 // back to the last char's lead byte
+    uint64_t complete_end = off;
+    if (k > 0) { const uint64_t L = clen(novel[k - 1]); if ((k - 1) + L > off) complete_end = k - 1; }
+    else complete_end = 0;
+
+    // tail: the last `want` complete characters of novel[0, complete_end).
+    const uint64_t winb = std::min<uint64_t>(complete_end, (uint64_t)want * 4 + 4);
+    uint64_t ws = complete_end - winb;
+    while (ws < complete_end && cont(novel[ws])) ws++;       // start on a char boundary
+    std::string window((const char*)novel.data() + ws, complete_end - ws);
+    size_t start = window.size();
+    for (int got = 0; start > 0 && got < want; got++) {
+        start--;
+        while (start > 0 && cont((unsigned char)window[start])) start--;
+    }
+    const std::string tail = window.substr(start);
+
+    // current: the character being transcribed now (the char at the frontier; empty if complete).
+    std::string current;
+    if (complete_end < total) {
+        const uint64_t e = std::min<uint64_t>(complete_end + clen(novel[complete_end]), total);
+        current.assign((const char*)novel.data() + complete_end, e - complete_end);
+    }
+
+    r.pushKV("active", true);
+    r.pushKV("index", (int)st.index);
+    r.pushKV("offset", off);
+    r.pushKV("total", total);
+    // Characters transcribed so far = post-fork block count (one character per block). Lets a
+    // display lay the text into fixed-width columns by absolute position (stable, column-by-column).
+    r.pushKV("chars", (int64_t)std::max<int64_t>(0, (int64_t)tip->nHeight - chainman.GetConsensus().nMortalLedgerHeight + 1));
+    r.pushKV("tail", tail);
+    r.pushKV("current", current);
+    r.pushKV("done", st.offset >= total);
+    return r;
+},
+    };
+}
+
+static RPCHelpMan getdreaming()
+{
+    return RPCHelpMan{
+        "getdreaming",
+        "\nThe dream being generated RIGHT NOW, streamed token by token as the voice writes it —\n"
+        "for a live display during a block's dream pause. `active` is true only while the miner is\n"
+        "dreaming; `seq` bumps on each new dream (so a display can tell one dream from the next).\n"
+        "Non-consensus, best-effort; needs no cs_main, so it answers even mid-assembly.\n",
+        {},
+        RPCResult{RPCResult::Type::OBJ, "", "", {
+            {RPCResult::Type::BOOL, "active", "true while a dream is being generated"},
+            {RPCResult::Type::NUM, "seq", "increments each time a new dream begins"},
+            {RPCResult::Type::NUM, "tokens", "how many tokens generated so far"},
+            {RPCResult::Type::STR, "text", "the partial dream so far as UTF-8 text (trimmed to a character boundary)"},
+        }},
+        RPCExamples{HelpExampleCli("getdreaming", "") + HelpExampleRpc("getdreaming", "")},
+        [&](const RPCHelpMan&, const JSONRPCRequest&) -> UniValue {
+            bool active{false};
+            uint64_t seq{0};
+            std::vector<int> toks;
+            MortalDreamingSnapshot(active, seq, toks);
+            UniValue r(UniValue::VOBJ);
+            r.pushKV("active", active);
+            r.pushKV("seq", (uint64_t)seq);
+            r.pushKV("tokens", (int)toks.size());
+            r.pushKV("text", toks.empty() ? std::string() : MortalDetokenize(toks));
+            return r;
+        },
+    };
+}
 
 void RegisterBlockchainRPCCommands(CRPCTable& t)
 {
@@ -3503,6 +3700,9 @@ void RegisterBlockchainRPCCommands(CRPCTable& t)
         {"blockchain", &getbestblockhash},
         {"blockchain", &getblockcount},
         {"blockchain", &getblock},
+        {"blockchain", &getblockdream},
+        {"blockchain", &getnovel},
+        {"blockchain", &getdreaming},
         {"blockchain", &getblockfrompeer},
         {"blockchain", &getblockhash},
         {"blockchain", &getblockheader},

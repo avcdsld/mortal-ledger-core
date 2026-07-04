@@ -586,13 +586,17 @@ public:
         consensus.signet_challenge.clear();
         consensus.nSubsidyHalvingInterval = 150;
         // Mortal Ledger: fire the fork at height 1 on regtest, so block 1 begins the
-        // canon (the genesis novel) and the Proof-of-Quotation / 写字本位 demos run.
+        // novel (the genesis novel) and the Proof-of-Quotation / 写字本位 demos run.
         consensus.nMortalLedgerHeight = 1;
         // The genesis novel is delivered on-chain via an OP_SOURCE output at height 1 (not
-        // embedded); consensus pins its SHA-256. This is SHA-256("旅への誘いが、次第に私の
-        // 空想から消えて行つた。") — 萩原朔太郎『猫町』の冒頭. The block-1 miner supplies the
-        // text via -mortalgenesis. (uint256{} display form = byte-reversed SHA-256.)
-        consensus.mortalGenesisNovelHash = uint256{"32d483e15c2e912301d6a2682f6774519cbab84be332cab09046250bf687dd46"};
+        // embedded); consensus pins its SHA-256. Default is SHA-256("Call me Ishmael. Some years
+        // ago, having little money, I went to sea.") — a short ASCII test novel the demos use (all
+        // 1-byte characters, so 1 block = 1 char = 1 byte and the byte-based demos stay fast). On
+        // regtest this can be overridden with -mortalgenesishash=<hex> to transcribe any text
+        // (e.g. the full 猫町). The block-1 miner supplies the matching bytes via -mortalgenesisfile.
+        // (uint256{} display form = byte-reversed SHA-256.)
+        consensus.mortalGenesisNovelHash = uint256{"117fc764c430eb8498e8d3e19b1a3e7734beca06392bd72306ecb2e3ab2cc023"};
+        if (opts.mortal_genesis_hash) consensus.mortalGenesisNovelHash = *opts.mortal_genesis_hash;
         consensus.BIP34Height = 1; // Always active unless overridden
         consensus.BIP34Hash = uint256();
         consensus.BIP65Height = 1;  // Always active unless overridden
@@ -718,9 +722,108 @@ public:
     }
 };
 
+/**
+ * Mortal Ledger devnet: a REAL fork chain from its own genesis, for running actual nodes (not a
+ * throwaway local regtest). Fork rules fire from block 1; difficulty is real (LWMA retargets, no
+ * min-difficulty escape); the network is separate from Bitcoin (own magic, port, address prefix).
+ * Seeds are empty — a tiny mortal network is wired with -addnode. Blocks 1..~61 hold the (easy)
+ * genesis difficulty until the LWMA window fills, then LWMA converges block time to nPowTargetSpacing.
+ */
+class CMortalDevParams : public CChainParams
+{
+public:
+    explicit CMortalDevParams(const std::optional<uint256>& genesis_hash)
+    {
+        m_chain_type = ChainType::MORTALDEV;
+        consensus.signet_blocks = false;
+        consensus.signet_challenge.clear();
+        consensus.nSubsidyHalvingInterval = 210000; // pre-fork only (fork at height 1); issuance is per byte after
+        consensus.nMortalLedgerHeight = 1;           // block 1 begins the novel (fork from genesis)
+        // Default genesis-novel pin = the ASCII test novel (fast to iterate); override with
+        // -mortalgenesishash=<raw sha> to transcribe any book (e.g. the full 猫町).
+        consensus.mortalGenesisNovelHash = uint256{"117fc764c430eb8498e8d3e19b1a3e7734beca06392bd72306ecb2e3ab2cc023"};
+        if (genesis_hash) consensus.mortalGenesisNovelHash = *genesis_hash;
+        consensus.BIP34Height = 1;
+        consensus.BIP34Hash = uint256();
+        consensus.BIP65Height = 1;
+        consensus.BIP66Height = 1;
+        consensus.CSVHeight = 1;
+        consensus.SegwitHeight = 0;
+        consensus.MinBIP9WarningHeight = 0;
+        consensus.powLimit = uint256{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
+        consensus.nPowTargetTimespan = 24 * 60 * 60;
+        // LWMA target block time. Set to ~the natural dream-dominated average (fast quotation-only
+        // blocks + one ~40s dream every 12 bytes ≈ 9s/block) so LWMA does NOT raise the pace on the
+        // fast blocks — this preserves the rhythm (quick carving, then a dream pause). A higher
+        // target would make LWMA grind the fast blocks up to fill the time, flattening the rhythm.
+        consensus.nPowTargetSpacing = 10;
+        consensus.fPowAllowMinDifficultyBlocks = false; // real difficulty (no testnet escape)
+        consensus.enforce_BIP94 = false;
+        consensus.fPowNoRetargeting = false;         // difficulty actually moves (LWMA governs post-fork)
+
+        consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].nStartTime = 0;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].min_activation_height = 0;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].threshold = 108;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].period = 144;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].bit = 2;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nStartTime = Consensus::BIP9Deployment::ALWAYS_ACTIVE;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].min_activation_height = 0;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].threshold = 108;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].period = 144;
+
+        consensus.nMinimumChainWork = uint256{};
+        consensus.defaultAssumeValid = uint256{};
+
+        // Own network magic / port (separate from Bitcoin and from ML regtest).
+        pchMessageStart[0] = 'M';
+        pchMessageStart[1] = 'L';
+        pchMessageStart[2] = 'D';
+        pchMessageStart[3] = 'V';
+        nDefaultPort = 28333;
+        nPruneAfterHeight = 1000;
+        m_assumed_blockchain_size = 0;
+        m_assumed_chain_state_size = 0;
+
+        genesis = CreateGenesisBlock(1296688602, 2, 0x207fffff, 1, 50 * COIN);
+        consensus.hashGenesisBlock = genesis.GetHash();
+        assert(consensus.hashGenesisBlock == uint256{"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"});
+        assert(genesis.hashMerkleRoot == uint256{"4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"});
+
+        vFixedSeeds.clear();
+        vSeeds.clear(); // a tiny mortal network: wire peers with -addnode
+
+        fDefaultConsistencyChecks = false;
+        m_is_mockable_chain = false;    // real time, real difficulty
+        m_assumeutxo_data = {};
+
+        chainTxData = ChainTxData{ .nTime = 0, .tx_count = 0, .dTxRate = 0 };
+
+        base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1, 50);
+        base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1, 58);
+        base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1, 178);
+        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x35, 0x87, 0xCF};
+        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
+
+        bech32_hrp = "mldev";
+
+        m_headers_sync_params = HeadersSyncParams{
+            .commitment_period = 275,
+            .redownload_buffer_size = 7017,
+        };
+    }
+};
+
 std::unique_ptr<const CChainParams> CChainParams::SigNet(const SigNetOptions& options)
 {
     return std::make_unique<const SigNetParams>(options);
+}
+
+std::unique_ptr<const CChainParams> CChainParams::MortalDev(const std::optional<uint256>& genesis_hash)
+{
+    return std::make_unique<const CMortalDevParams>(genesis_hash);
 }
 
 std::unique_ptr<const CChainParams> CChainParams::RegTest(const RegTestOptions& options)

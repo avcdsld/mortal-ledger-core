@@ -46,6 +46,18 @@ void ReadRegTestArgs(const ArgsManager& args, CChainParams::RegTestOptions& opti
     if (auto value = args.GetBoolArg("-fastprune")) options.fastprune = *value;
     if (HasTestOption(args, "bip94")) options.enforce_bip94 = true;
 
+    // Mortal Ledger: override the pinned genesis-novel hash (regtest only). Value is the RAW
+    // SHA-256 of the novel text (as `shasum -a256 novel.txt` prints it), letting a dev chain
+    // transcribe any book. The block-H miner still supplies the matching bytes via
+    // -mortalgenesisfile; consensus checks SHA-256(bytes) == this.
+    if (args.IsArgSet("-mortalgenesishash")) {
+        const std::vector<unsigned char> b = ParseHex(args.GetArg("-mortalgenesishash", ""));
+        if (b.size() != 32) {
+            throw std::runtime_error("-mortalgenesishash must be 64 hex characters (a raw SHA-256)");
+        }
+        options.mortal_genesis_hash = uint256(b);
+    }
+
     for (const std::string& arg : args.GetArgs("-testactivationheight")) {
         const auto found{arg.find('@')};
         if (found == std::string::npos) {
@@ -132,6 +144,15 @@ std::unique_ptr<const CChainParams> CreateChainParams(const ArgsManager& args, c
         auto opts = CChainParams::RegTestOptions{};
         ReadRegTestArgs(args, opts);
         return CChainParams::RegTest(opts);
+    }
+    case ChainType::MORTALDEV: {
+        std::optional<uint256> genesis_hash;
+        if (args.IsArgSet("-mortalgenesishash")) {
+            const std::vector<unsigned char> b = ParseHex(args.GetArg("-mortalgenesishash", ""));
+            if (b.size() != 32) throw std::runtime_error("-mortalgenesishash must be 64 hex characters (a raw SHA-256)");
+            genesis_hash = uint256(b);
+        }
+        return CChainParams::MortalDev(genesis_hash);
     }
     }
     assert(false);

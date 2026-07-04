@@ -152,10 +152,16 @@ public:
         std::unordered_map<Consensus::BuriedDeployment, int> activation_heights{};
         bool fastprune{false};
         bool enforce_bip94{false};
+        //! Mortal Ledger: override the pinned genesis-novel SHA-256 (regtest only), so a dev
+        //! chain can transcribe any text (e.g. the full 猫町) instead of the built-in test novel.
+        std::optional<uint256> mortal_genesis_hash{};
     };
 
     static std::unique_ptr<const CChainParams> RegTest(const RegTestOptions& options);
     static std::unique_ptr<const CChainParams> SigNet(const SigNetOptions& options);
+    //! Mortal Ledger devnet: a real fork chain from its own genesis. genesis_hash optionally
+    //! overrides the pinned genesis-novel SHA-256 (so a dev chain can transcribe any book).
+    static std::unique_ptr<const CChainParams> MortalDev(const std::optional<uint256>& genesis_hash);
     static std::unique_ptr<const CChainParams> Main();
     static std::unique_ptr<const CChainParams> TestNet();
     static std::unique_ptr<const CChainParams> TestNet4();

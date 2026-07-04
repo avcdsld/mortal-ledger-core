@@ -434,6 +434,8 @@ private:
             return " signet";
         case ChainType::REGTEST:
             return " regtest";
+        case ChainType::MORTALDEV:
+            return " mortaldev";
         case ChainType::MAIN:
             return "";
         }

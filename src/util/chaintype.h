@@ -14,6 +14,8 @@ enum class ChainType {
     SIGNET,
     REGTEST,
     TESTNET4,
+    MORTALDEV,  // Mortal Ledger devnet: a real fork chain from its own genesis (own magic/ports,
+                // real LWMA difficulty, fork rules from block 1) for running actual nodes.
 };
 
 std::string ChainTypeToString(ChainType chain);

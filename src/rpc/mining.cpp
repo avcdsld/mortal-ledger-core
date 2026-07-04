@@ -9,6 +9,11 @@
 #include <chainparams.h>
 #include <chainparamsbase.h>
 #include <common/system.h>
+#include <sync.h>
+#include <uint256.h>
+
+#include <atomic>
+#include <deque>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
@@ -137,37 +142,64 @@ static RPCHelpMan getnetworkhashps()
     };
 }
 
+// Mortal Ledger: a sampled window of the hashes the miner TRIED while grinding for the next
+// character — the visible labour of Proof of Quotation (a 3-byte kanji costs ~2^24 attempts).
+// One in ~MINING_HASH_SAMPLE tries is kept in a small ring; getmininghashes exposes it so an
+// exhibition display can show the grind (each failed hash, and how close it came). Non-consensus,
+// best-effort — sampling races are harmless.
+namespace {
+struct MiningHashSample { uint32_t nonce; std::string hash; int matched; }; // matched = leading quotation bytes that lined up
+Mutex g_mining_hashes_mutex;
+std::deque<MiningHashSample> g_mining_hashes GUARDED_BY(g_mining_hashes_mutex);
+std::atomic<uint64_t> g_mining_hash_counter{0};
+constexpr size_t MINING_HASH_WINDOW = 512;
+constexpr uint64_t MINING_HASH_SAMPLE = 20000;
+} // namespace
+
+static void MortalSampleMiningHash(uint32_t nonce, const uint256& h, const std::vector<unsigned char>& slice)
+{
+    if ((g_mining_hash_counter.fetch_add(1, std::memory_order_relaxed) % MINING_HASH_SAMPLE) != 0) return;
+    int matched = 0;
+    for (size_t i = 0; i < slice.size(); i++) { if ((unsigned char)h.begin()[i] == slice[i]) matched++; else break; }
+    LOCK(g_mining_hashes_mutex);
+    g_mining_hashes.push_back({nonce, h.GetHex(), matched});
+    while (g_mining_hashes.size() > MINING_HASH_WINDOW) g_mining_hashes.pop_front();
+}
+
 static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t& max_tries, std::shared_ptr<const CBlock>& block_out, bool process_new_block)
 {
     block_out.reset();
     block.hashMerkleRoot = BlockMerkleRoot(block);
 
     // Mortal Ledger: Proof of Quotation with OP_SOURCE succession. The block
-    // template already carries any successor registration in its coinbase (the block
+    // template already carries any next novel registration in its coinbase (the block
     // assembler injects it when the active novel is exhausted), so read the slice
     // this block must transcribe from that registration, then grind until the hash
     // satisfies BOTH the pace (magnitude vs the LWMA target, quotation bytes zeroed)
     // and the quotation slice (the next bytes of the novel).
     const Consensus::Params& consensus = chainman.GetConsensus();
-    // The canon state entering this block is the active tip's leaving state, folded by
+    // The novel state entering this block is the active tip's leaving state, folded by
     // the fork-height rule; resolve the active novel's bytes and read the slice this
-    // block must transcribe (from the successor in its coinbase at a seam). Below the
-    // fork height there is no canon and no quotation slice is required.
+    // block must transcribe (from the next novel in its coinbase at a seam). Below the
+    // fork height there is no novel and no quotation slice is required.
     const CBlockIndex* tip = WITH_LOCK(::cs_main, return chainman.ActiveChain().Tip());
-    const CanonState canon_in = CanonEnter(tip->nHeight + 1,
-        CanonState{tip->m_canon_source_height, tip->m_canon_offset, tip->m_canon_index}, consensus);
-    const std::vector<unsigned char> canon_novel = ResolveCanonNovel(canon_in, tip, consensus, chainman.m_blockman);
-    const std::vector<unsigned char> slice = canon_in.active()
-        ? CanonExpectedSlice(canon_in, canon_novel, ExtractCanonRegistration(block))
+    const NovelState novel_in = NovelEnter(tip->nHeight + 1,
+        NovelState{tip->m_novel_source_height, tip->m_novel_offset, tip->m_novel_index}, consensus);
+    const std::vector<unsigned char> novel_bytes = ResolveNovel(novel_in, tip, consensus, chainman.m_blockman);
+    const std::vector<unsigned char> slice = novel_in.active()
+        ? NovelExpectedSlice(novel_in, novel_bytes, ExtractNovelRegistration(block))
         : std::vector<unsigned char>{};
     auto pace_ok = [&](const uint256& h) {
         return CheckPaceTarget(h, block.nBits, consensus); // pace half (k zeroed); matches CheckBlockHeader
     };
     auto quote_ok = [&](const uint256& h) {
-        return !canon_in.active() || HashCarriesSlice(h, slice); // pre-fork: no quotation
+        return !novel_in.active() || HashCarriesSlice(h, slice); // pre-fork: no quotation
     };
 
-    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !(pace_ok(block.GetHash()) && quote_ok(block.GetHash())) && !chainman.m_interrupt) {
+    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !chainman.m_interrupt) {
+        const uint256 h = block.GetHash();
+        MortalSampleMiningHash(block.nNonce, h, slice); // sampled window for external visualisation
+        if (pace_ok(h) && quote_ok(h)) break;           // found: nNonce carries the next character
         ++block.nNonce;
         --max_tries;
     }
@@ -1166,10 +1198,10 @@ static RPCHelpMan submitheader()
     };
 }
 
-static RPCHelpMan listsuccessors()
+static RPCHelpMan listnextnovels()
 {
-    return RPCHelpMan{"listsuccessors",
-        "\nMortal Ledger: list this node's configured successor magazine — the ordered novels\n"
+    return RPCHelpMan{"listnextnovels",
+        "\nMortal Ledger: list this node's configured next novel magazine — the ordered novels\n"
         "it will register at successive seams. Succession is open (any miner may register any\n"
         "text); this magazine is local mining policy, not consensus. An empty magazine lets the\n"
         "chain starve at completion.\n",
@@ -1177,16 +1209,16 @@ static RPCHelpMan listsuccessors()
         RPCResult{RPCResult::Type::ARR, "", "", {
             {RPCResult::Type::OBJ, "", "", {
                 {RPCResult::Type::NUM, "index", "magazine position (0-based); entry i is registered at the seam leaving novel ordinal i (genesis = 0)"},
-                {RPCResult::Type::NUM, "bytes", "length of the successor novel in bytes"},
-                {RPCResult::Type::STR, "text", "the successor novel decoded as UTF-8 (best effort)"},
-                {RPCResult::Type::STR_HEX, "hex", "the successor novel bytes"},
+                {RPCResult::Type::NUM, "bytes", "length of the next novel in bytes"},
+                {RPCResult::Type::STR, "text", "the next novel decoded as UTF-8 (best effort)"},
+                {RPCResult::Type::STR_HEX, "hex", "the next novel bytes"},
             }},
         }},
-        RPCExamples{HelpExampleCli("listsuccessors", "") + HelpExampleRpc("listsuccessors", "")},
+        RPCExamples{HelpExampleCli("listnextnovels", "") + HelpExampleRpc("listnextnovels", "")},
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
         {
             UniValue arr(UniValue::VARR);
-            const auto mag = node::MortalSuccessors();
+            const auto mag = node::MortalNextNovels();
             for (size_t i = 0; i < mag.size(); i++) {
                 UniValue o(UniValue::VOBJ);
                 o.pushKV("index", (int)i);
@@ -1200,9 +1232,42 @@ static RPCHelpMan listsuccessors()
     };
 }
 
+static RPCHelpMan getmininghashes()
+{
+    return RPCHelpMan{
+        "getmininghashes",
+        "\nReturn a sampled window of the hashes this node most recently TRIED while mining\n"
+        "(Mortal Ledger). About one in 20000 grind attempts is kept, up to a small ring — the visible\n"
+        "labour of Proof of Quotation (a 3-byte character costs ~16M tries).\n"
+        "Oldest first. Non-consensus, best-effort; intended for a mining display.\n",
+        {},
+        RPCResult{RPCResult::Type::ARR, "", "", {
+            {RPCResult::Type::OBJ, "", "", {
+                {RPCResult::Type::NUM, "nonce", "the nonce tried"},
+                {RPCResult::Type::STR_HEX, "hash", "the block hash it produced (which failed the quotation and/or pace)"},
+                {RPCResult::Type::NUM, "matched", "how many leading quotation bytes lined up with the target character (k = its byte length)"},
+            }},
+        }},
+        RPCExamples{HelpExampleCli("getmininghashes", "") + HelpExampleRpc("getmininghashes", "")},
+        [&](const RPCHelpMan&, const JSONRPCRequest&) -> UniValue {
+            UniValue arr(UniValue::VARR);
+            LOCK(g_mining_hashes_mutex);
+            for (const auto& s : g_mining_hashes) {
+                UniValue o(UniValue::VOBJ);
+                o.pushKV("nonce", (uint64_t)s.nonce);
+                o.pushKV("hash", s.hash);
+                o.pushKV("matched", s.matched);
+                arr.push_back(std::move(o));
+            }
+            return arr;
+        },
+    };
+}
+
 void RegisterMiningRPCCommands(CRPCTable& t)
 {
     static const CRPCCommand commands[]{
+        {"mining", &getmininghashes},
         {"mining", &getnetworkhashps},
         {"mining", &getmininginfo},
         {"mining", &prioritisetransaction},
@@ -1210,7 +1275,7 @@ void RegisterMiningRPCCommands(CRPCTable& t)
         {"mining", &getblocktemplate},
         {"mining", &submitblock},
         {"mining", &submitheader},
-        {"mining", &listsuccessors},
+        {"mining", &listnextnovels},
 
         {"hidden", &generatetoaddress},
         {"hidden", &generatetodescriptor},
