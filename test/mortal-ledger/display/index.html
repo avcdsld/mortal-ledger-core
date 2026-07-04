@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mortal Ledger — 夢</title>
+<style>
+  :root {
+    --bg:#0a0a0b;
+    --novel:#868d96;   /* the carved record: cool, dim grey */
+    --dream:#efe8d8;   /* the living voice: warm, bright */
+    --live:#fbf6ea;    /* the pen — the machine's "now" */
+    --faint:#565049;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; }
+  body {
+    background:var(--bg); color:var(--dream); position:relative; overflow:hidden;
+    font-family:"Hiragino Mincho ProN","Yu Mincho","YuMincho","Noto Serif JP",serif;
+  }
+
+  /* Two FIXED halves that never affect each other: dream (voice) LEFT, novel RIGHT. Both hug the
+     centre line; a soft top/bottom mask lets the text float. */
+  #dream-half, #novel-half {
+    position:absolute; top:0; width:50vw; height:100vh; display:flex; align-items:center; padding:10vh 3.5vw;
+    -webkit-mask-image:linear-gradient(to bottom, transparent, #000 8%, #000 92%, transparent);
+            mask-image:linear-gradient(to bottom, transparent, #000 8%, #000 92%, transparent);
+  }
+  #dream-half { left:0;  justify-content:flex-end; }
+  #novel-half { right:0; justify-content:flex-start; }
+
+  /* Dream and novel share the SAME font size and column pitch (line-height 2.1), so the novel's
+     columns are the same height and 行間 as the dream; CPC is computed to fill that height. */
+  #dream, #novel { font-size:clamp(1.6rem, 3vw, 2.6rem); line-height:2.1; letter-spacing:.04em; }
+
+  #dream { writing-mode:vertical-rl; color:var(--dream); text-shadow:0 0 26px rgba(244,239,227,.10); max-height:80vh; }
+  #dream .pen { color:var(--live); animation:blink 1.1s steps(1,end) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  #wait  { color:var(--faint); letter-spacing:.5em; writing-mode:vertical-rl; }
+
+  #novel { display:flex; flex-direction:row-reverse; align-items:flex-start; gap:0; color:var(--novel); }
+  #novel .col { writing-mode:vertical-rl; white-space:nowrap; line-height:2.1; }
+
+  /* The pen = the character being mined. While the miner grinds, it flickers through REAL tried
+     hashes read as UTF-8 (mostly tofu). The instant the quotation matches, that character is born
+     into the record and flashes. */
+  #novel .current { color:var(--live); text-shadow:0 0 24px rgba(251,246,234,.55); }
+  #novel .current.pulse { animation:breathe 3s ease-in-out infinite; }
+  @keyframes breathe { 0%,100%{opacity:.5} 50%{opacity:1} }
+  #novel .born { animation:born .7s ease-out; }
+  @keyframes born { 0%{ color:var(--live); text-shadow:0 0 28px var(--live); } 100%{ text-shadow:none; } }
+
+  #meta { position:fixed; right:2.4vw; bottom:3vh; text-align:right; color:var(--faint); font-size:.82rem; letter-spacing:.2em; }
+</style>
+</head>
+<body>
+  <div id="dream-half"><div id="dream"></div><div id="wait">…</div></div>
+  <div id="novel-half"><div id="novel"></div></div>
+  <div id="meta"></div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let CPC = 18;         // characters per vertical column — computed responsively to fill the height
+  const MAX_COLS = 7;   // columns shown before the oldest (rightmost) drops, column by column
+  const enc = new TextEncoder();
+  const dec = new TextDecoder("utf-8", { fatal:false });
+
+  function esc(t){ const d=document.createElement("div"); d.textContent=t; return d.innerHTML; }
+  function fmt(n){ return (n ?? 0).toLocaleString("en-US"); }
+  function byteLen(c){ return c ? enc.encode(c).length : 0; }
+
+  // Fill the column to the SAME height as the dream: measure a CJK character's vertical advance,
+  // then fit as many as the 80vh column allows. Recomputed on resize.
+  function computeCPC() {
+    const el = $("novel"), cs = getComputedStyle(el);
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:absolute;visibility:hidden;writing-mode:vertical-rl;white-space:nowrap;"
+      + `font:${cs.font};letter-spacing:${cs.letterSpacing};line-height:${cs.lineHeight};`;
+    probe.textContent = "猫町散文詩風夢語朔太郎蠅";  // 12 CJK chars
+    document.body.appendChild(probe);
+    const adv = probe.offsetHeight / 12;
+    probe.remove();
+    CPC = Math.max(6, Math.floor((0.80 * window.innerHeight) / adv));
+  }
+
+  // Read the low k bytes of a tried hash (= where the quotation lands: the display hash's tail, in
+  // reverse byte order) and decode them as one UTF-8 character. Usually invalid → a tofu glyph.
+  function attemptChar(hashHex, k) {
+    if (!hashHex || !k) return "";
+    const t = hashHex.slice(-2 * k);
+    const bytes = new Uint8Array(k);
+    for (let i = 0; i < k; i++) bytes[i] = parseInt(t.substr(t.length - 2 * (i + 1), 2), 16);
+    const s = dec.decode(bytes);
+    return s && [...s].length ? [...s][0] : "□";
+  }
+
+  let lastNovel = {}, gHeight = 0, penEl = null, curK = 0;
+  function paintNovel(n, flashBorn) {
+    lastNovel = n;
+    const written = [...(n.tail || "")];
+    const total = (n.chars ?? written.length);
+    const base = total - written.length;
+    const items = written.map((ch, k) => ({ ch, a: base + k, pen: false }));
+    if (n.current) items.push({ ch: n.current, a: total, pen: true });
+    const byCol = new Map();
+    for (const it of items) {
+      const ci = Math.floor(it.a / CPC);
+      (byCol.get(ci) || byCol.set(ci, []).get(ci)).push(it);
+    }
+    const cols = [...byCol.keys()].sort((x, y) => x - y).slice(-MAX_COLS);
+    $("novel").innerHTML = cols.map((ci, i) => {
+      const age = cols.length > 1 ? i / (cols.length - 1) : 1;   // 0 = oldest … 1 = newest (pen)
+      const op = (0.22 + 0.78 * age).toFixed(3);
+      return `<div class="col" style="opacity:${op}">${byCol.get(ci).map(it => {
+        if (it.pen) return `<span class="current pulse">${esc(it.ch)}</span>`;
+        if (flashBorn && it.a === total - 1) return `<span class="born">${esc(it.ch)}</span>`; // just quoted into being
+        return esc(it.ch);
+      }).join("")}</div>`;
+    }).join("");
+    penEl = $("novel").querySelector(".current");
+    curK = byteLen(n.current);
+    $("meta").textContent = n.done
+      ? `${fmt(gHeight)} ブロック　—　書き了えた`
+      : `${fmt(gHeight)} ブロック　${fmt(n.offset)} バイト`;
+  }
+
+  // Dream: revealed ONE CHARACTER AT A TIME toward the streamed target.
+  let dSeq = -1, dTarget = [], dShown = 0, dActive = false;
+  function drawDream() {
+    if (dShown < dTarget.length) dShown++;
+    const has = dTarget.length > 0;
+    $("wait").style.display  = has ? "none"  : "block";
+    $("dream").style.display = has ? "block" : "none";
+    const writing = dActive || dShown < dTarget.length;
+    $("dream").innerHTML = esc(dTarget.slice(0, dShown).join("")) + (writing ? '<span class="pen">▍</span>' : "");
+    setTimeout(drawDream, 40);
+  }
+
+  // The pen flickers through REAL tried hashes decoded as characters — the search — while the miner
+  // grinds. (During a dream pause it holds the real character.)
+  let gMining = [], gi = 0;
+  function drawPen() {
+    if (penEl && curK && !dActive && gMining.length) {
+      const s = gMining[(gi = (gi + 7) % gMining.length)];
+      penEl.textContent = attemptChar(s.hash || "", curK);
+    }
+    setTimeout(drawPen, 55);   // ~18 flickers/second
+  }
+
+  let lastOffset = -1;
+  async function tick() {
+    try {
+      const s = await (await fetch("/state", { cache:"no-store" })).json();
+      const nv = s.novel || {};
+      gHeight = s.height || 0;
+      gMining = s.mining || [];
+      const born = lastOffset >= 0 && (nv.offset || 0) > lastOffset;   // a character was quoted into being
+      lastOffset = nv.offset || 0;
+      paintNovel(nv, born);
+      const dr = s.dreaming || { active:false, seq:0, text:"" };
+      const target = [...(dr.text || s.dream || "")];
+      if (dr.seq !== dSeq) { dSeq = dr.seq; dShown = dr.active ? 0 : target.length; }
+      dTarget = target;
+      dActive = !!dr.active;
+    } catch (e) { /* hold the last frame through a node hiccup */ }
+    setTimeout(tick, 400);
+  }
+
+  computeCPC();
+  addEventListener("resize", () => { computeCPC(); paintNovel(lastNovel); });
+  drawDream();
+  drawPen();
+  tick();
+</script>
+</body>
+</html>
