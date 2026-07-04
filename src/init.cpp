@@ -40,6 +40,7 @@
 #include <key.h>
 #include <logging.h>
 #include <mapport.h>
+#include <mortaldream.h>
 #include <mortalllm.h>
 #include <net.h>
 #include <net_permissions.h>
@@ -497,11 +498,13 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-fastprune", "Use smaller block files and lower minimum prune height for testing purposes", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
 #if HAVE_SYSTEM
     argsman.AddArg("-blocknotify=<cmd>", "Execute command when the best block changes (%s in cmd is replaced by block hash)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-mortalsuccessor=<text>", "Mortal Ledger: append a successor novel (literal UTF-8 text) to this node's successor magazine. Repeatable; the magazine is consumed in the given order, one entry per completed novel. An empty magazine lets the chain starve at completion (no successor named). Local mining policy, not consensus.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-mortalsuccessorfile=<path>", "Mortal Ledger: append a successor novel read from <path> (the whole file = one novel) to the successor magazine. Repeatable; appended after any -mortalsuccessor entries.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-mortalnextnovel=<text>", "Mortal Ledger: append a next novel (literal UTF-8 text) to this node's next novel magazine. Repeatable; the magazine is consumed in the given order, one entry per completed novel. An empty magazine lets the chain starve at completion (no next novel named). Local mining policy, not consensus.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-mortalnextnovelfile=<path>", "Mortal Ledger: append a next novel read from <path> (the whole file = one novel) to the next novel magazine. Repeatable; appended after any -mortalnextnovel entries.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mortalgenesis=<text>", "Mortal Ledger: the genesis novel (literal UTF-8) this node supplies when mining the fork-height block H. Delivered on-chain via OP_SOURCE and pinned by consensus. Needed only to mine block H.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mortalgenesisfile=<path>", "Mortal Ledger: the genesis novel read from <path> (whole file), as -mortalgenesis.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-mortalgenesishash=<hex>", "Mortal Ledger (regtest only): override the pinned genesis-novel SHA-256 with this raw hex (as `shasum -a256 novel.txt` prints), so a dev chain can transcribe any book (e.g. the full 猫町) instead of the built-in test novel. The block-1 miner must supply the matching text via -mortalgenesisfile.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mortalmodel=<path>", "Mortal Ledger: path to the pinned voice model (.mlm). When set, OP_JUDGE/OP_DREAM/OP_TRANSLATE run the real integer Qwen during script evaluation instead of the built-in stub. The forward is fully fixed-point (bit-identical across architectures), as required for OP_JUDGE to gate a spend.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-mortaldreammaxnew=<n>", strprintf("Mortal Ledger: hard cap on an inscribed block dream's length in tokens (the dream usually stops earlier at EOS). A non-consensus mining knob; 0 disables dream inscription on this node. (default: %d)", MORTAL_DREAM_MAX_NEW), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 #endif
     argsman.AddArg("-blockreconstructionextratxn=<n>", strprintf("Extra transactions to keep in memory for compact block reconstructions (default: %u)", DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blocksonly", strprintf("Whether to reject transactions from network peers. Disables automatic broadcast and rebroadcast of transactions, unless the source peer has the 'forcerelay' permission. RPC transactions are not affected. (default: %u)", DEFAULT_BLOCKSONLY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -1441,23 +1444,28 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     const ArgsManager& args = *Assert(node.args);
     const CChainParams& chainparams = Params();
 
-    // Mortal Ledger: load this node's successor magazine (local mining policy). The miner
+    // Mortal Ledger: load this node's next novel magazine (local mining policy). The miner
     // registers magazine[novel ordinal] at each seam; an empty magazine lets the chain
-    // starve at completion (no successor named). Succession is open, so this is NOT
+    // starve at completion (no next novel named). Succession is open, so this is NOT
     // consensus — different nodes may carry different magazines.
     {
         std::vector<std::vector<unsigned char>> mag;
-        for (const std::string& s : args.GetArgs("-mortalsuccessor")) mag.emplace_back(s.begin(), s.end());
-        for (const std::string& p : args.GetArgs("-mortalsuccessorfile")) {
+        for (const std::string& s : args.GetArgs("-mortalnextnovel")) mag.emplace_back(s.begin(), s.end());
+        for (const std::string& p : args.GetArgs("-mortalnextnovelfile")) {
             std::ifstream f{fs::PathFromString(p).std_path(), std::ios::binary | std::ios::ate};
-            if (!f.good()) return InitError(Untranslated(strprintf("-mortalsuccessorfile: cannot read %s", p)));
+            if (!f.good()) return InitError(Untranslated(strprintf("-mortalnextnovelfile: cannot read %s", p)));
             std::streamsize sz = f.tellg(); f.seekg(0);
             std::vector<unsigned char> novel(sz > 0 ? (size_t)sz : 0);
             if (sz > 0) f.read(reinterpret_cast<char*>(novel.data()), sz);
             mag.push_back(std::move(novel));
         }
-        if (!mag.empty()) LogInfo("Mortal Ledger: loaded %u successor novel(s) into the magazine\n", (unsigned)mag.size());
-        node::MortalLoadSuccessors(std::move(mag));
+        if (!mag.empty()) LogInfo("Mortal Ledger: loaded %u next novel(s) into the magazine\n", (unsigned)mag.size());
+        node::MortalLoadNextNovels(std::move(mag));
+    }
+
+    // Mortal Ledger: the per-block dream-length cap (non-consensus mining knob).
+    if (args.IsArgSet("-mortaldreammaxnew")) {
+        node::MortalSetDreamMaxNew((int)args.GetIntArg("-mortaldreammaxnew", MORTAL_DREAM_MAX_NEW));
     }
 
     // Mortal Ledger: the genesis novel this node delivers if it mines the fork height H

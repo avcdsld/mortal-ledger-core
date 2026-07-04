@@ -9,10 +9,15 @@
 #include <cstdint>
 #include <cstdlib>
 
-/** Mortal Ledger: the largest single canon novel an OP_SOURCE registration may carry. A
+/** Mortal Ledger: the largest single novel an OP_SOURCE registration may carry. A
  *  seam block is granted a weight/size exemption of up to this many bytes so it can carry a
  *  whole new novel in one block; larger texts must be split across successive seams. */
 static const unsigned int MAX_NOVEL_BYTES = 4000000;
+/** Mortal Ledger: the largest a block's inscribed dream may be (the pushed bytes: a 4-byte
+ *  magic + u32-LE token ids). The dream is data, not consensus, but the block is granted a
+ *  matching size/weight exemption up to this cap, so a dream cannot bloat a block without
+ *  bound. ~256 tokens (the default cap) is ~1 KB; this leaves generous headroom. */
+static const unsigned int MAX_DREAM_BYTES = 4096;
 /** The maximum allowed size for a serialized block, in bytes (network/disk rule). Raised by
  *  MAX_NOVEL_BYTES so a seam block carrying a novel fits on the wire and on disk. */
 static const unsigned int MAX_BLOCK_SERIALIZED_SIZE = 4000000 + MAX_NOVEL_BYTES;

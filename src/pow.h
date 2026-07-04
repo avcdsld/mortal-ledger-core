@@ -16,6 +16,7 @@
 class CBlock;
 class CBlockHeader;
 class CBlockIndex;
+class CScript;
 class uint256;
 class arith_uint256;
 
@@ -45,55 +46,71 @@ bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Par
  *  then require the magnitude <= target (the LWMA-retargeted pace). */
 bool CheckPaceTarget(uint256 hash, unsigned int nBits, const Consensus::Params& params);
 
-/** Mortal Ledger: Proof of Quotation with OP_SOURCE succession, as a per-block canon
+/** Mortal Ledger: Proof of Quotation with OP_SOURCE succession, as a per-block novel
  *  state carried on the block index (reorg-/reindex-safe; see chain.h).
  *
- *  The canon transition is a PURE fold over ancestors: the state leaving a block is a
- *  function of the state entering it (= the parent's leaving state) and the successor
+ *  The novel transition is a PURE fold over ancestors: the state leaving a block is a
+ *  function of the state entering it (= the parent's leaving state) and the next novel
  *  the block registers in its coinbase. No process globals, so competing branches never
  *  contaminate each other and a restart recomputes identically. The block hash must
  *  carry the next slice of the active novel in its head bytes; concatenate the head
  *  bytes of the chain and the novel reappears. When the active novel is exhausted the
- *  block must register a successor and transcription continues into it; with none the
+ *  block must register a next novel and transcription continues into it; with none the
  *  chain starves (completion = death).
  *
- *  CanonState identifies the active novel by source_height — the height of the block
+ *  NovelState identifies the active novel by source_height — the height of the block
  *  that installed it (== Consensus::Params::nMortalLedgerHeight for the genesis novel;
  *  < 0 = inactive / pre-fork) — and the transcription offset reached. The novel's bytes
  *  are resolved on demand (genesis constant, or the source block's coinbase) and passed
  *  in, so this header stays free of block I/O. */
-struct CanonState {
+struct NovelState {
     int source_height{-1};
     uint64_t offset{0};
-    uint32_t index{0};   // novel ordinal (0 = genesis); selects the local successor magazine entry at a seam
+    uint32_t index{0};   // novel ordinal (0 = genesis); selects the local next novel magazine entry at a seam
     bool active() const { return source_height >= 0; }
 };
 
-/** The canon state ENTERING the block at `height`, given its parent's leaving state.
+/** The novel state ENTERING the block at `height`, given its parent's leaving state.
  *  Below H: inactive. At H: the genesis novel begins. Above H: inherit the parent. */
-CanonState CanonEnter(int height, const CanonState& parent_after, const Consensus::Params& params);
+NovelState NovelEnter(int height, const NovelState& parent_after, const Consensus::Params& params);
 
 /** The K bytes this block must transcribe, given the entering state, the active novel's
- *  bytes (resolved from in.source_height) and any successor `reg` registered in THIS
+ *  bytes (resolved from in.source_height) and any next novel `reg` registered in THIS
  *  block (empty if none). When the active novel is exhausted the slice is read from reg;
  *  with neither, the result is empty => no valid block. */
-std::vector<unsigned char> CanonExpectedSlice(const CanonState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg);
+std::vector<unsigned char> NovelExpectedSlice(const NovelState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg);
 
-/** The canon state LEAVING the block at `height` (stored on its index), given the
+/** The novel state LEAVING the block at `height` (stored on its index), given the
  *  entering state, the active novel's bytes and the block's registration. Installs a
- *  registered successor at the seam where the active novel ends. Pure; no globals. */
-CanonState CanonNext(const CanonState& in, const std::vector<unsigned char>& novel, int height, const std::vector<unsigned char>& reg);
+ *  registered next novel at the seam where the active novel ends. Pure; no globals. */
+NovelState NovelNext(const NovelState& in, const std::vector<unsigned char>& novel, int height, const std::vector<unsigned char>& reg);
 
 /** Does the hash carry the slice in its low internal bytes? (PoW magnitude lives in the
  *  high bytes, so quotation and pace are orthogonal.) Empty slice => no valid block. */
 bool HashCarriesSlice(const uint256& hash, const std::vector<unsigned char>& slice);
 
-/** Mortal Ledger: the successor novel a block registers in its coinbase (empty if none),
+/** Mortal Ledger: the next novel a block registers in its coinbase (empty if none),
  *  and the coinbase issuance = bytes transcribed this block × 1 BAB. */
-std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block);
-/** All canon registrations (OP_SOURCE outputs) in the block's coinbase (normally 0 or 1). */
-std::vector<std::vector<unsigned char>> ExtractCanonRegistrations(const CBlock& block);
-CAmount CanonIssuance(const CanonState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg);
+std::vector<unsigned char> ExtractNovelRegistration(const CBlock& block);
+/** All novel registrations (OP_SOURCE outputs) in the block's coinbase (normally 0 or 1). */
+std::vector<std::vector<unsigned char>> ExtractNovelRegistrations(const CBlock& block);
+
+/** Mortal Ledger: a block's dream rides an unspendable coinbase output
+ *  `OP_RETURN <MORTAL_DREAM_MAGIC ++ token-ids>` (ids u32-LE; see src/mortaldream.cpp).
+ *  OP_RETURN — not OP_DREAM, which is a functional opcode — keeps the output provably
+ *  unspendable and never runs the seed-dependent voice during validation. The dream is data,
+ *  NOT consensus; a model-less node simply stores the inscribed ids. */
+inline constexpr unsigned char MORTAL_DREAM_MAGIC[4] = {'M', 'L', 'D', '1'};
+/** True if `script` is a dream inscription. If so and token_bytes != nullptr, fills it with
+ *  the inscribed token bytes (the magic stripped). */
+bool IsDreamInscription(const CScript& script, std::vector<unsigned char>* token_bytes = nullptr);
+/** The token bytes of every dream inscribed in the block's coinbase (normally 0 or 1; >1 is
+ *  rejected by block validation). */
+std::vector<std::vector<unsigned char>> ExtractDreamInscriptions(const CBlock& block);
+/** Build the unspendable coinbase output script carrying `token_bytes` as a dream (the inverse
+ *  of IsDreamInscription): `OP_RETURN <MORTAL_DREAM_MAGIC ++ token_bytes>`. */
+CScript MakeDreamInscription(const std::vector<unsigned char>& token_bytes);
+CAmount NovelIssuance(const NovelState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg);
 
 /**
  * Return false if the proof-of-work requirement specified by new_nbits at a

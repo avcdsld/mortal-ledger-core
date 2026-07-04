@@ -13,7 +13,7 @@ pkill -f "bitcoind -regtest" 2>/dev/null
 rm -rf $DD; mkdir -p $DD
 # load a successor so mining can continue past the 69-byte genesis novel (seam at block 70)
 SUCC="Call me Ishmael. Some years ago, never mind how long precisely, having little or no money."
-"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="旅への誘いが、次第に私の空想から消えて行つた。" -fallbackfee=0.0001 -mortalsuccessor="$SUCC" >/dev/null
+"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="Call me Ishmael. Some years ago, having little money, I went to sea." -fallbackfee=0.0001 -mortalnextnovel="$SUCC" >/dev/null
 for _i in $(seq 1 60); do [ -f "$DD/regtest/.cookie" ] && break; sleep 0.5; done
 CLI -rpcwait createwallet t >/dev/null
 ADDR=$(CLI getnewaddress)

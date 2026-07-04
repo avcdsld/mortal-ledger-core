@@ -120,15 +120,15 @@ struct Params {
     /**
      * Mortal Ledger: the fork-activation height H — the single firing point for every
      * Mortal Ledger consensus rule. At and after H: Proof of Quotation (the block hash
-     * transcribes the canon), 写字本位 issuance (the coinbase mints the bytes written),
-     * the per-block canon state on the index, the LWMA per-block retarget (Zawy's
+     * transcribes the novel), 写字本位 issuance (the coinbase mints the bytes written),
+     * the per-block novel state on the index, the LWMA per-block retarget (Zawy's
      * linearly weighted moving average, replacing Bitcoin's 2016-block window once a
      * full post-fork window exists), and the replay-protection fork id (MORTAL_FORKID).
      * Below H the chain is inherited Bitcoin and untouched. -1 = never (dormant).
      */
     int nMortalLedgerHeight{-1};
     bool IsMortalLedgerActive(int height) const { return nMortalLedgerHeight >= 0 && height >= nMortalLedgerHeight; }
-    /** Mortal Ledger: SHA-256 of the genesis novel (the canon that begins at H). The block at
+    /** Mortal Ledger: SHA-256 of the genesis novel (the novel that begins at H). The block at
      *  H must carry it in an OP_SOURCE output whose hash equals this; the bytes live on-chain
      *  (delivered at H), not in the binary. Null when the fork is dormant (nMortalLedgerHeight<0). */
     uint256 mortalGenesisNovelHash;

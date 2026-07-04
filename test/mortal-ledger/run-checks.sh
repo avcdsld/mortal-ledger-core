@@ -25,7 +25,7 @@ pass() { echo "  PASS: $1"; }
 fail() { echo "  FAIL: $1"; fails=$((fails+1)); }
 
 echo "== link tests (compiled against real Core libraries) =="
-for t in seal script mnemonic llmhook lwma lwmafire chainparams; do
+for t in seal script mnemonic llmhook lwma lwmafire chainparams charunit; do
   bin="/tmp/ml_${t}test"
   if ! "$CXX" -std=c++20 -I "$ROOT/src" -I "$BUILD/src" \
         "$HERE/link-tests/${t}_test.cpp" "${LINK_LIBS[@]}" -o "$bin" 2>"/tmp/ml_${t}_cc.log"; then
@@ -55,6 +55,20 @@ else
   [ $rc -eq 0 ] && pass "mortalllm (${out##*$'\n'})" || { fail "mortalllm"; echo "$out" | sed 's/^/    /'; }
 fi
 
+# Dream inscription wiring: the model-free pieces (12 reference-word indices from the parent
+# hash, prompt assembly from the pinned token tables, the u32-LE token codec, and the OP_RETURN
+# inscription round-trip). The voice itself (MortalBlockDream) needs the real model and is
+# proven by demos/dream_demo.sh.
+echo "== dream inscription wiring (mortaldream, model-free) =="
+if ! "$CXX" -std=c++20 -I "$ROOT/src" -I "$BUILD/src" \
+      "$HERE/link-tests/dream_test.cpp" "$ROOT/src/mortaldream.cpp" "$ROOT/src/mortalllm.cpp" "${LINK_LIBS[@]}" \
+      -o /tmp/ml_dreamtest 2>/tmp/ml_dream_cc.log; then
+  fail "dream (compile)"; sed 's/^/    /' /tmp/ml_dream_cc.log | head -8
+else
+  out="$(/tmp/ml_dreamtest 2>&1)"; rc=$?
+  [ $rc -eq 0 ] && pass "dream (${out##*$'\n'})" || { fail "dream"; echo "$out" | sed 's/^/    /'; }
+fi
+
 run_demo() { # $1=name  $2=grep-marker that must appear in output
   pkill -f "bitcoind -regtest" 2>/dev/null; sleep 1
   local out; out="$(bash "$HERE/demos/$1_demo.sh" 2>&1)"
@@ -64,12 +78,15 @@ run_demo() { # $1=name  $2=grep-marker that must appear in output
 }
 
 echo "== regtest demos (driving bitcoind/bitcoin-cli) =="
-run_demo poq         'blockcount after: 69'
-run_demo succession  'blockcount after: 86'
-run_demo issuance    'total supply after A\+B: *85\.0 BAB'
+run_demo poq         'blockcount after: 68'
+run_demo succession  'blockcount after: 85'
+run_demo issuance    'total supply after A\+B: *84\.0 BAB'
 run_demo reindex     'REINDEX-SAFE'
 run_demo lwma_fire   'h=62[[:space:]]+bits=20[0-6]'
-run_demo op_source   'bad-canon-size'
+run_demo op_source   'bad-novel-size'
+# Dream inscription end-to-end (mine a block, read its dream via getblockdream). Needs the real
+# voice model; without it (e.g. CI) the demo skips cleanly and still passes.
+run_demo dream       'dream present: True|SKIP:'
 pkill -f "bitcoind -regtest" 2>/dev/null
 
 echo

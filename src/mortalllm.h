@@ -5,6 +5,8 @@
 #ifndef BITCOIN_MORTALLLM_H
 #define BITCOIN_MORTALLLM_H
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,7 +17,7 @@ class uint256;
  *  conversion is deterministic, so anyone can re-derive this and verify it. See
  *  test/mortal-ledger/MODEL.md. */
 inline constexpr const char* MORTAL_CANONICAL_MLM_SHA256 =
-    "804b39e0f63ed788692052244ea4563a76389c6257ea3380d0ca92e4861ea8b7";
+    "f15557797f9d1323a66ed6bca269ecb72a38e6ef1003d0e2050dbcb84f9eb46c";
 
 /** Mortal Ledger: load the pinned canonical voice model (.mlm) and install its
  *  integer-deterministic forward behind g_mortal_llm, so OP_JUDGE / OP_DREAM /
@@ -30,6 +32,18 @@ inline constexpr const char* MORTAL_CANONICAL_MLM_SHA256 =
  *  with a toy model). Also throws std::runtime_error if the model cannot be read.
  *  Hyperparameters are derived from the model's tensor shapes. */
 void MortalInstallLLM(const std::string& mlm_path, const std::string& expected_sha256_hex = "");
+
+/** Mortal Ledger: true once a voice model has been loaded (MortalInstallLLM succeeded). The
+ *  dream generator (MortalDreamBegin/Next and MortalBlockDream) needs the weights, so the
+ *  miner/RPC guard on this before attempting to dream. */
+bool MortalModelLoaded();
+
+/** Mortal Ledger: turn a dream's token ids back into UTF-8 text using the .mlm's pinned
+ *  detokenizer vocab (id -> raw bytes; the optional VOC1 section). Pure C++ table lookup +
+ *  byte concatenation — no tokenizer, no Python. Drops an incomplete trailing UTF-8 sequence
+ *  (byte-level BPE can split a character across tokens) and bounds the output to max_bytes on
+ *  a character boundary. Returns empty if the model has no vocab section (toy model). */
+std::string MortalDetokenize(const std::vector<int>& tokens, std::size_t max_bytes = SIZE_MAX);
 
 /** Mortal Ledger: a streaming dream generator with a KV cache. Bit-identical to iterating
  *  the stateless forward, but each token costs ~one position instead of reprocessing the

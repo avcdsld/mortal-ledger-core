@@ -185,23 +185,28 @@ std::optional<BlockRef> WaitTipChanged(ChainstateManager& chainman, KernelNotifi
  */
 bool CooldownIfHeadersAhead(ChainstateManager& chainman, KernelNotifications& kernel_notifications, const BlockRef& last_tip, bool& interrupt_mining);
 
-/** Mortal Ledger: the local successor "magazine" — the ordered novels this node will
+/** Mortal Ledger: the local next novel "magazine" — the ordered novels this node will
  *  register at successive seams. Succession is OPEN (any miner may register any text);
  *  WHAT this node registers is local mining policy, not consensus. The novel ordinal
- *  (CanonState::index; genesis = 0) selects the entry, so the choice is deterministic
+ *  (NovelState::index; genesis = 0) selects the entry, so the choice is deterministic
  *  and reorg-safe: at the seam leaving novel i, register magazine[i] (magazine[0] is the
- *  first successor after the genesis novel). An empty/exhausted magazine => no
+ *  first next novel after the genesis novel). An empty/exhausted magazine => no
  *  registration => the chain starves (completion = death). Loaded once at startup from
- *  -mortalsuccessor / -mortalsuccessorfile; replaces the old hard-coded successor. */
-void MortalLoadSuccessors(std::vector<std::vector<unsigned char>> successors);
-std::vector<std::vector<unsigned char>> MortalSuccessors();
-std::vector<unsigned char> MortalNextSuccessor(uint32_t novel_index);
+ *  -mortalnextnovel / -mortalnextnovelfile; replaces the old hard-coded next novel. */
+void MortalLoadNextNovels(std::vector<std::vector<unsigned char>> next_novels);
+std::vector<std::vector<unsigned char>> MortalNextNovels();
+std::vector<unsigned char> MortalNextNovel(uint32_t novel_index);
 
 /** Mortal Ledger: the genesis novel this node supplies when mining the fork-height block H
  *  (delivered on-chain via OP_SOURCE, pinned by consensus). Loaded from -mortalgenesis /
  *  -mortalgenesisfile. Empty if unset (then this node cannot mine block H). */
 void MortalLoadGenesis(std::vector<unsigned char> novel);
 std::vector<unsigned char> MortalGenesisNovel();
+
+/** Mortal Ledger: hard cap on an inscribed dream's length in tokens (the dream usually stops
+ *  earlier at an EOS id). A non-consensus mining knob (-mortaldreammaxnew); 0 disables dream
+ *  inscription on this node. Defaults to MORTAL_DREAM_MAX_NEW. */
+void MortalSetDreamMaxNew(int n);
 } // namespace node
 
 #endif // BITCOIN_NODE_MINER_H

@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <algorithm>
 
 using u8=uint8_t; using u16=uint16_t; using u32=uint32_t; using u64=uint64_t;
 using i8=int8_t; using i16=int16_t; using i32=int32_t; using i64=int64_t;
@@ -67,6 +68,8 @@ struct Tensor { std::string name; std::vector<u64> dims; u32 type; u64 offset; u
 struct Gguf {
     std::map<std::string,i64> kvi;       // integer metadata
     std::map<std::string,std::string> kvs; // string metadata
+    std::map<std::string,std::vector<std::string>> kvsa; // string arrays (e.g. tokenizer tokens)
+    std::map<std::string,std::vector<i64>> kvia;         // int/bool arrays (e.g. token types)
     std::vector<Tensor> tensors;
     u64 data_off = 0; u32 alignment = 32;
 };
@@ -88,8 +91,20 @@ static void read_value(Cur& c, u32 t, const std::string& key, Gguf& g) {
         case GT_STR: g.kvs[key] = c.str(); break;
         case GT_ARR: { u32 sub = c.get<u32>(); u64 cnt = c.get<u64>();
             for (u64 j = 0; j < cnt; j++) {
-                if (sub == GT_STR) c.str();
-                else read_value(c, sub, "", g);  // scalars: read+discard
+                if (sub == GT_STR) { std::string s = c.str(); if (!key.empty()) g.kvsa[key].push_back(std::move(s)); }
+                else {
+                    i64 v = 0; bool keep = true;
+                    switch (sub) {
+                        case GT_U8:  v = c.get<u8>();  break; case GT_I8:  v = c.get<i8>();  break;
+                        case GT_U16: v = c.get<u16>(); break; case GT_I16: v = c.get<i16>(); break;
+                        case GT_U32: v = c.get<u32>(); break; case GT_I32: v = c.get<i32>(); break;
+                        case GT_U64: v = (i64)c.get<u64>(); break; case GT_I64: v = c.get<i64>(); break;
+                        case GT_BOOL:v = c.get<u8>();  break;
+                        case GT_F32: c.skip(4); keep = false; break; case GT_F64: c.skip(8); keep = false; break;
+                        default: keep = false; break;
+                    }
+                    if (keep && !key.empty()) g.kvia[key].push_back(v);
+                }
             } break; }
         default: break;
     }
@@ -158,9 +173,50 @@ static QTensor quantize(const Tensor& t, const std::vector<float>& w) {
     return o;
 }
 
+// ---- tokenizer vocab: id -> raw bytes (for the node's pure-C++ detokenizer) -----
+// GPT-2 byte-level decoder: invert bytes_to_unicode() to recover the raw bytes a
+// byte-encoded token string stands for. Qwen (like all GPT-2/tiktoken BPE) stores its
+// tokens this way, so detokenizing is just: per token, map each codepoint back to a byte.
+static std::map<int,int> gpt2_byte_decoder(){
+    std::vector<int> bs;
+    for(int b='!';b<='~';b++) bs.push_back(b);
+    for(int b=0xA1;b<=0xAC;b++) bs.push_back(b);
+    for(int b=0xAE;b<=0xFF;b++) bs.push_back(b);
+    std::vector<int> cs=bs; int n=0;
+    for(int b=0;b<256;b++){ if(std::find(bs.begin(),bs.end(),b)==bs.end()){ bs.push_back(b); cs.push_back(256+n); n++; } }
+    std::map<int,int> dec; for(size_t i=0;i<bs.size();i++) dec[cs[i]]=bs[i]; return dec;
+}
+static std::vector<int> utf8_codepoints(const std::string& s){
+    std::vector<int> cp; size_t i=0,n=s.size();
+    while(i<n){ unsigned char c=s[i]; int v,len;
+        if(c<0x80){v=c;len=1;} else if(c<0xE0){v=c&0x1F;len=2;} else if(c<0xF0){v=c&0x0F;len=3;} else {v=c&0x07;len=4;}
+        for(int k=1;k<len && i+(size_t)k<n;k++) v=(v<<6)|(s[i+k]&0x3F);
+        cp.push_back(v); i+=len; }
+    return cp;
+}
+// id -> raw bytes for the whole vocabulary. CONTROL / USER_DEFINED (special) tokens map to
+// empty, matching skip_special_tokens; non-byte-level tokens (shouldn't occur for Qwen) too.
+static std::vector<std::string> build_vocab(const Gguf& g){
+    std::vector<std::string> vocab;
+    auto it = g.kvsa.find("tokenizer.ggml.tokens");
+    if (it==g.kvsa.end()) return vocab;                 // GGUF without an embedded tokenizer
+    const auto& toks = it->second;
+    const std::vector<i64>* types = g.kvia.count("tokenizer.ggml.token_type") ? &g.kvia.at("tokenizer.ggml.token_type") : nullptr;
+    auto dec = gpt2_byte_decoder();
+    vocab.resize(toks.size());
+    for (size_t i=0;i<toks.size();i++){
+        int tt = (types && i<types->size()) ? (int)(*types)[i] : 1; // 1 = NORMAL
+        if (tt==3 || tt==4) continue;                   // CONTROL / USER_DEFINED -> empty
+        std::string raw; bool okk=true;
+        for (int cp : utf8_codepoints(toks[i])){ auto d=dec.find(cp); if(d==dec.end()){ okk=false; break; } raw.push_back((char)d->second); }
+        if (okk) vocab[i]=std::move(raw);
+    }
+    return vocab;
+}
+
 // ---- deterministic serialization of the integer model + SHA-256 pin ------------
 static void put(std::vector<u8>& b, const void* p, size_t n){ const u8* q=(const u8*)p; b.insert(b.end(),q,q+n); }
-static std::vector<u8> serialize(const std::vector<QTensor>& m) {
+static std::vector<u8> serialize(const std::vector<QTensor>& m, const std::vector<std::string>& vocab) {
     std::vector<u8> b; const char* magic="MLM1"; put(b,magic,4);
     u64 nt=m.size(); put(b,&nt,8);
     for (auto& t : m) {
@@ -173,6 +229,14 @@ static std::vector<u8> serialize(const std::vector<QTensor>& m) {
         } else {
             u64 nq=t.q16.size(); put(b,&nq,8); for(i32 v:t.q16) put(b,&v,4);
         }
+    }
+    // Mortal Ledger: optional detokenizer vocab section, so the node turns a dream's token
+    // ids back into text in pure C++ (no tokenizer). Appended after the tensors; a reader
+    // that hits EOF here (e.g. the toy model) simply has no vocab.
+    if (!vocab.empty()) {
+        const char* vm="VOC1"; put(b,vm,4);
+        u64 nv=vocab.size(); put(b,&nv,8);
+        for (const auto& s : vocab){ u16 L=(u16)(s.size()>0xffff?0:s.size()); put(b,&L,2); put(b,s.data(),L); }
     }
     return b;
 }
@@ -238,7 +302,7 @@ static int run_selftest(){
           f16_to_f32(0x3c00)==1.0f && f16_to_f32(0x3800)==0.5f && f16_to_f32(0xc000)==-2.0f);
 
     // convert the whole model to the canonical integer scheme, twice -> same pin
-    auto convert=[&](){ std::vector<QTensor> m; for(auto& t:g.tensors){ auto f=dequant(g,raw,t); m.push_back(quantize(t,f)); } return serialize(m); };
+    auto convert=[&](){ std::vector<QTensor> m; for(auto& t:g.tensors){ auto f=dequant(g,raw,t); m.push_back(quantize(t,f)); } return serialize(m, build_vocab(g)); };
     auto blob1=convert(); auto blob2=convert();
     std::string pin1=sha256_hex(blob1), pin2=sha256_hex(blob2);
     check("integer conversion deterministic (reproducible SHA-256 pin)", pin1==pin2);
@@ -286,11 +350,15 @@ static int convert_file(const char* in, const char* out){
         if(q.mode==0) i8bytes+=q.q.size(); else q16count+=q.q16.size();
         m.push_back(std::move(q));
     }
-    auto blob=serialize(m); write_file(out, blob);
+    auto vocab = build_vocab(g);
+    u64 vbytes=0; for (const auto& s : vocab) vbytes += s.size();
+    auto blob=serialize(m, vocab); write_file(out, blob);
     printf("source GGUF  SHA-256: %s\n", sha256_hex(raw).c_str());
     printf("canonical    SHA-256: %s\n", sha256_hex(blob).c_str());
     printf("pinned model: %s  (%.1f MB)   int8 weights: %llu B   1-D Q16.16 elems: %llu\n",
            out, blob.size()/1e6, (unsigned long long)i8bytes, (unsigned long long)q16count);
+    printf("detok vocab : %zu tokens  (%.2f MB raw bytes)%s\n", vocab.size(), vbytes/1e6,
+           vocab.empty() ? "  [none — GGUF has no tokenizer]" : "");
     return 0;
 }
 

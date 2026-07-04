@@ -1,6 +1,6 @@
 B="${BINDIR:-$PWD/build/bin}"
 DD=/tmp/btc/rtreindex
-NOVEL="旅への誘いが、次第に私の空想から消えて行つた。"   # genesis canon: 萩原朔太郎『猫町』
+NOVEL="Call me Ishmael. Some years ago, having little money, I went to sea."   # genesis canon: 萩原朔太郎『猫町』
 # Mortal Ledger 本番化(B, patch 0012)の実機デモ：正典状態は pow.cpp のプロセスグローバル
 # ではなく、ブロック index に載る純粋な畳み込み（CDiskBlockIndex に永続化）。だから
 # 再起動でディスクから復元でき、-reindex でブロックファイルから再計算しても壊れない。
@@ -15,7 +15,7 @@ wait_count() { # $1=expected  RPC が立ち上がり目標高さに達するま�
 
 pkill -f "bitcoind -regtest" 2>/dev/null
 rm -rf $DD; mkdir -p $DD
-"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="旅への誘いが、次第に私の空想から消えて行つた。" -fallbackfee=0.0001 >/dev/null
+"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="Call me Ishmael. Some years ago, having little money, I went to sea." -fallbackfee=0.0001 >/dev/null
 for _i in $(seq 1 60); do [ -f "$DD/regtest/.cookie" ] && break; sleep 0.5; done
 CLI -rpcwait createwallet t >/dev/null
 ADDR=$(CLI getnewaddress)
@@ -28,7 +28,7 @@ echo -n "recovered (1..12): "; recover 1 12; echo
 echo
 echo "=== 2. 再起動：正典状態を CDiskBlockIndex からロードし、続きを正しく写字 ==="
 CLI stop >/dev/null; sleep 2
-"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="旅への誘いが、次第に私の空想から消えて行つた。" -fallbackfee=0.0001 >/dev/null
+"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="Call me Ishmael. Some years ago, having little money, I went to sea." -fallbackfee=0.0001 >/dev/null
 for _i in $(seq 1 60); do [ -f "$DD/regtest/.cookie" ] && break; sleep 0.5; done
 CLI -rpcwait getblockcount >/dev/null
 echo "blockcount after restart: $(CLI getblockcount)  (保持)"
@@ -39,7 +39,7 @@ echo "  -> ロードした offset から block 13..15 が正しく続いた（�
 echo
 echo "=== 3. -reindex：ブロックファイルから畳み込みを再計算しても全保持・全一致 ==="
 CLI stop >/dev/null; sleep 2
-"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="旅への誘いが、次第に私の空想から消えて行つた。" -reindex -fallbackfee=0.0001 >/dev/null
+"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="Call me Ishmael. Some years ago, having little money, I went to sea." -reindex -fallbackfee=0.0001 >/dev/null
 for _i in $(seq 1 60); do [ -f "$DD/regtest/.cookie" ] && break; sleep 0.5; done
 wait_count 15 || echo "  (warning: reindex がまだ 15 に達していない)"
 echo "blockcount after -reindex: $(CLI getblockcount)"

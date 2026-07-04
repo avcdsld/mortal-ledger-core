@@ -24,7 +24,7 @@ typedef std::vector<unsigned char> valtype;
 // consensus library stays self-contained (no dependency on node/common), so the
 // node populates them through these hooks rather than the other way around.
 int64_t g_mortal_ttl = 0;          // the machine's remaining life (only falls)
-int64_t g_mortal_source_left = 0;  // the active novel's remaining bytes (only falls until a successor)
+int64_t g_mortal_source_left = 0;  // the active novel's remaining bytes (only falls until a next novel)
 std::function<std::vector<unsigned char>(int64_t)> g_mortal_snippet; // height -> transcribed fragment
 
 // Mortal Ledger: replay protection. When the fork is active a fork id is folded

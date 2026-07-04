@@ -11,10 +11,10 @@ wait_count() { for i in $(seq 1 120); do [ "$(CLI getblockcount 2>/dev/null)" = 
 # a ~2MB successor novel (deterministic), and a 5MB one (over MAX_NOVEL_BYTES)
 python3 -c "open('/tmp/btc/novel2mb.txt','wb').write((b'MortalLedger-'*200000)[:2000000])"
 python3 -c "open('/tmp/btc/novel5mb.txt','wb').write(b'X'*5000000)"
-GEN=$(python3 -c "print(len('旅への誘いが、次第に私の空想から消えて行つた。'.encode('utf-8')))")  # genesis 69B
+GEN=$(python3 -c "print(len('Call me Ishmael. Some years ago, having little money, I went to sea.'.encode('utf-8')))")  # genesis 69B
 
 pkill -f "bitcoind -regtest" 2>/dev/null; rm -rf $DD; mkdir -p $DD
-"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="旅への誘いが、次第に私の空想から消えて行つた。" -fallbackfee=0.0001 -mortalsuccessorfile=/tmp/btc/novel2mb.txt >/dev/null
+"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="Call me Ishmael. Some years ago, having little money, I went to sea." -fallbackfee=0.0001 -mortalnextnovelfile=/tmp/btc/novel2mb.txt >/dev/null
 for _i in $(seq 1 60); do [ -f "$DD/regtest/.cookie" ] && break; sleep 0.5; done
 CLI -rpcwait createwallet t >/dev/null; ADDR=$(CLI getnewaddress)
 
@@ -33,17 +33,17 @@ echo "recovered: '$REC'  expect: '$EXP'  -> $([ "$REC" = "$EXP" ] && echo OK || 
 
 echo "=== 3. -reindex でも 2MB 継ぎ目ブロックは保持される（serialized 上限も連動引き上げ済み）==="
 END=$(CLI getblockcount); CLI stop >/dev/null; sleep 2
-"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="旅への誘いが、次第に私の空想から消えて行つた。" -reindex >/dev/null
+"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="Call me Ishmael. Some years ago, having little money, I went to sea." -reindex >/dev/null
 for _i in $(seq 1 60); do [ -f "$DD/regtest/.cookie" ] && break; sleep 0.5; done
 wait_count $END && echo "after -reindex count=$(CLI getblockcount) (= $END 保持)" || echo "reindex did not reach $END"
 CLI stop >/dev/null; sleep 2
 
 echo "=== 4. MAX_NOVEL_BYTES(4MB)超の後継は無効（分割して次の継ぎ目で続けるしかない）==="
 DD=/tmp/btc/rtopsrc2; rm -rf $DD; mkdir -p $DD
-"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="旅への誘いが、次第に私の空想から消えて行つた。" -fallbackfee=0.0001 -mortalsuccessorfile=/tmp/btc/novel5mb.txt >/dev/null
+"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="Call me Ishmael. Some years ago, having little money, I went to sea." -fallbackfee=0.0001 -mortalnextnovelfile=/tmp/btc/novel5mb.txt >/dev/null
 for _i in $(seq 1 60); do [ -f "$DD/regtest/.cookie" ] && break; sleep 0.5; done
 CLI -rpcwait createwallet t >/dev/null; ADDR=$(CLI getnewaddress)
 CLI generatetoaddress $GEN "$ADDR" >/dev/null
-echo -n "5MB 後継で継ぎ目を掘る -> "; CLI generatetoaddress 1 "$ADDR" 2>&1 | grep -o "bad-canon-size[^\"]*" | head -1
+echo -n "5MB 後継で継ぎ目を掘る -> "; CLI generatetoaddress 1 "$ADDR" 2>&1 | grep -o "bad-novel-size[^\"]*" | head -1
 echo "blockcount=$(CLI getblockcount) (= $GEN のまま = 4MB 超は拒否)"
 CLI stop >/dev/null

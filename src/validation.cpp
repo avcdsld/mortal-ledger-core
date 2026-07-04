@@ -1839,13 +1839,13 @@ CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
 {
     // Mortal Ledger: 写字本位 (transcription standard). The coinbase no longer
     // mints a halving money subsidy; it mints BAB equal to the bytes transcribed
-    // this block (rate: 1 BAB per byte). The AUTHORITATIVE issuance is CanonIssuance()
+    // this block (rate: 1 BAB per byte). The AUTHORITATIVE issuance is NovelIssuance()
     // (= the length of the slice this block carries × 1 BAB), enforced in
     // ConnectBlock and used by the block assembler, so it tracks the actual
     // transcription: k BAB on a normal block, less on a novel's final partial block,
-    // and none once the canon is exhausted with no successor (death = no issuance).
+    // and none once the novel is exhausted with no next novel (death = no issuance).
     // This function remains as the nominal per-block subsidy for RPC/index callers.
-    // At the consensus writing granularity (k=1) it equals CanonIssuance for every
+    // At the consensus writing granularity (k=1) it equals NovelIssuance for every
     // block actually produced. The literary unit and the coin (BAB) are different
     // units; we do not force them equal. The inherited Bitcoin supply predates the
     // fork and is untouched.
@@ -2294,18 +2294,18 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
 }
 
 
-// Mortal Ledger: resolve the bytes of the active novel a CanonState refers to. The
+// Mortal Ledger: resolve the bytes of the active novel a NovelState refers to. The
 // genesis novel is the consensus constant; a registered novel is read from the coinbase
 // of the block that installed it (at source_height on pindex's branch). Keeps the
-// per-index canon state small (an id + offset) — the bytes live on disk, read on demand.
-std::vector<unsigned char> ResolveCanonNovel(const CanonState& s, const CBlockIndex* pindex, const Consensus::Params& params, node::BlockManager& blockman)
+// per-index novel state small (an id + offset) — the bytes live on disk, read on demand.
+std::vector<unsigned char> ResolveNovel(const NovelState& s, const CBlockIndex* pindex, const Consensus::Params& params, node::BlockManager& blockman)
 {
     if (!s.active()) return {};
     const CBlockIndex* src = pindex ? pindex->GetAncestor(s.source_height) : nullptr;
     if (!src) return {};
     CBlock srcblock;
     if (!blockman.ReadBlock(srcblock, *src)) return {};
-    return ExtractCanonRegistration(srcblock);
+    return ExtractNovelRegistration(srcblock);
 }
 
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
@@ -2361,38 +2361,38 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         return true;
     }
 
-    // Mortal Ledger: per-block canon state (reorg-/reindex-safe). The state ENTERING
+    // Mortal Ledger: per-block novel state (reorg-/reindex-safe). The state ENTERING
     // this block is its parent's leaving state, folded by the fork-height rule; below the
-    // fork height H there is no canon. Compute it once here, enforce Proof of Quotation
+    // fork height H there is no novel. Compute it once here, enforce Proof of Quotation
     // against it (and 写字本位 issuance below), then store the leaving state on the index.
-    // The active novel's bytes are resolved from the canon state (genesis or source block).
-    const CanonState canon_in = CanonEnter(pindex->nHeight,
-        pindex->pprev ? CanonState{pindex->pprev->m_canon_source_height, pindex->pprev->m_canon_offset, pindex->pprev->m_canon_index} : CanonState{},
+    // The active novel's bytes are resolved from the novel state (genesis or source block).
+    const NovelState novel_in = NovelEnter(pindex->nHeight,
+        pindex->pprev ? NovelState{pindex->pprev->m_novel_source_height, pindex->pprev->m_novel_offset, pindex->pprev->m_novel_index} : NovelState{},
         params.GetConsensus());
-    const std::vector<unsigned char> canon_reg = ExtractCanonRegistration(block);
-    // The active novel's bytes: at the genesis seam (height H) the canon state's source IS
+    const std::vector<unsigned char> novel_reg = ExtractNovelRegistration(block);
+    // The active novel's bytes: at the genesis seam (height H) the novel state's source IS
     // this block, so the novel is the genesis OP_SOURCE carried here; otherwise it is resolved
-    // from the source block (genesis at H, or a successor seam) on disk.
-    const std::vector<unsigned char> canon_novel =
-        (canon_in.source_height == pindex->nHeight) ? canon_reg
-        : ResolveCanonNovel(canon_in, pindex, params.GetConsensus(), m_blockman);
+    // from the source block (genesis at H, or a next novel seam) on disk.
+    const std::vector<unsigned char> novel_bytes =
+        (novel_in.source_height == pindex->nHeight) ? novel_reg
+        : ResolveNovel(novel_in, pindex, params.GetConsensus(), m_blockman);
 
     // Mortal Ledger: the genesis novel is delivered on-chain at height H via an OP_SOURCE
     // output, pinned by consensus (its SHA-256 must equal mortalGenesisNovelHash). The bytes
     // then live on-chain and are transcribed byte-by-byte like any novel.
-    if (canon_in.active() && pindex->nHeight == params.GetConsensus().nMortalLedgerHeight) {
+    if (novel_in.active() && pindex->nHeight == params.GetConsensus().nMortalLedgerHeight) {
         uint256 gh;
-        CSHA256().Write(canon_reg.data(), canon_reg.size()).Finalize(gh.begin());
-        if (canon_reg.empty() || gh != params.GetConsensus().mortalGenesisNovelHash)
+        CSHA256().Write(novel_reg.data(), novel_reg.size()).Finalize(gh.begin());
+        if (novel_reg.empty() || gh != params.GetConsensus().mortalGenesisNovelHash)
             return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-genesis-novel", "fork-height block must carry the pinned genesis novel via OP_SOURCE");
     }
 
     // Mortal Ledger: an OP_SOURCE registration is valid only at a seam — the genesis height H
-    // (delivering the genesis novel, checked above) or a successor seam (the active novel is
+    // (delivering the genesis novel, checked above) or a next novel seam (the active novel is
     // exhausted). This defines succession and rate-limits the over-sized seam block to once
     // per novel (it cannot appear mid-novel or pre-fork, so the size exemption is not abused).
-    if (!canon_reg.empty() && pindex->nHeight != params.GetConsensus().nMortalLedgerHeight &&
-        !(canon_in.active() && CanonExpectedSlice(canon_in, canon_novel, {}).empty()))
+    if (!novel_reg.empty() && pindex->nHeight != params.GetConsensus().nMortalLedgerHeight &&
+        !(novel_in.active() && NovelExpectedSlice(novel_in, novel_bytes, {}).empty()))
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "op-source-not-at-seam", "OP_SOURCE registration outside a seam");
 
     // Mortal Ledger: fire replay protection at the same height H. Once active, the
@@ -2404,10 +2404,10 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
 
     // On real connection (not the unmined template, fJustCheck), the block hash must
     // carry the next slice of the active novel in its head bytes. At a seam the slice is
-    // read from the successor the block registers in its coinbase (succession), else no
+    // read from the next novel the block registers in its coinbase (succession), else no
     // valid block exists (completion = death).
-    if (!fJustCheck && canon_in.active()) {
-        const std::vector<unsigned char> slice = CanonExpectedSlice(canon_in, canon_novel, canon_reg);
+    if (!fJustCheck && novel_in.active()) {
+        const std::vector<unsigned char> slice = NovelExpectedSlice(novel_in, novel_bytes, novel_reg);
         if (!HashCarriesSlice(block_hash, slice)) {
             return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-quotation", "block hash does not transcribe the novel");
         }
@@ -2679,10 +2679,10 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<MillisecondsDouble>(m_chainman.time_connect) / m_chainman.num_blocks_total);
 
     // Mortal Ledger: 写字本位. At and after the fork height the coinbase may mint at most
-    // the bytes transcribed this block (CanonIssuance against the canon state computed
+    // the bytes transcribed this block (NovelIssuance against the novel state computed
     // above, i.e. the slice this block carries); below H the inherited subsidy applies.
-    CAmount blockReward = nFees + (canon_in.active()
-        ? CanonIssuance(canon_in, canon_novel, canon_reg)
+    CAmount blockReward = nFees + (novel_in.active()
+        ? NovelIssuance(novel_in, novel_bytes, novel_reg)
         : GetBlockSubsidy(pindex->nHeight, params.GetConsensus()));
     if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
         state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
@@ -2745,16 +2745,16 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         Ticks<std::chrono::nanoseconds>(time_5 - time_start)
     );
 
-    // Mortal Ledger: the block is fully connected; record the canon state LEAVING it on
+    // Mortal Ledger: the block is fully connected; record the novel state LEAVING it on
     // its index (a pure fold of the entering state, this block's height and registration).
     // On a reorg this is simply read from pprev — nothing to undo — and CDiskBlockIndex
     // persists it so a restart/reindex recomputes it identically.
-    if (canon_in.active()) {
-        const CanonState canon_out = CanonNext(canon_in, canon_novel, pindex->nHeight, canon_reg);
-        pindex->m_canon_source_height = canon_out.source_height;
-        pindex->m_canon_offset = canon_out.offset;
-        pindex->m_canon_index = canon_out.index;
-        pindex->nStatus |= BLOCK_CANON;
+    if (novel_in.active()) {
+        const NovelState novel_out = NovelNext(novel_in, novel_bytes, pindex->nHeight, novel_reg);
+        pindex->m_novel_source_height = novel_out.source_height;
+        pindex->m_novel_offset = novel_out.offset;
+        pindex->m_novel_index = novel_out.index;
+        pindex->nStatus |= BLOCK_NOVEL;
         m_blockman.m_dirty_blockindex.insert(pindex);
     }
 
@@ -3301,7 +3301,7 @@ void Chainstate::PruneBlockIndexCandidates() {
     while (it != setBlockIndexCandidates.end() && setBlockIndexCandidates.value_comp()(*it, m_chain.Tip())) {
         setBlockIndexCandidates.erase(it++);
     }
-    // Either the current tip or a successor of it we're working towards is left in setBlockIndexCandidates.
+    // Either the current tip or a next novel of it we're working towards is left in setBlockIndexCandidates.
     assert(!setBlockIndexCandidates.empty());
 }
 
@@ -4074,19 +4074,30 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     // Note that witness malleability is checked in ContextualCheckBlock, so no
     // checks that use witness data may be performed here.
 
-    // Mortal Ledger: the canon registration (OP_SOURCE output) is exempt from the block
+    // Mortal Ledger: the novel registration (OP_SOURCE output) is exempt from the block
     // size/weight limits, capped at MAX_NOVEL_BYTES, so a seam block can carry a whole new
     // novel. At most one registration per block; an oversize novel is rejected.
-    const std::vector<std::vector<unsigned char>> canon_regs = ExtractCanonRegistrations(block);
-    if (canon_regs.size() > 1)
-        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-canon-multi", "more than one OP_SOURCE registration");
-    if (!canon_regs.empty() && canon_regs[0].size() > MAX_NOVEL_BYTES)
-        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-canon-size", "OP_SOURCE novel exceeds MAX_NOVEL_BYTES");
-    const uint64_t canon_exempt = canon_regs.empty() ? 0 : (uint64_t)canon_regs[0].size();
+    const std::vector<std::vector<unsigned char>> novel_regs = ExtractNovelRegistrations(block);
+    if (novel_regs.size() > 1)
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-novel-multi", "more than one OP_SOURCE registration");
+    if (!novel_regs.empty() && novel_regs[0].size() > MAX_NOVEL_BYTES)
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-novel-size", "OP_SOURCE novel exceeds MAX_NOVEL_BYTES");
+    const uint64_t novel_exempt = novel_regs.empty() ? 0 : (uint64_t)novel_regs[0].size();
+
+    // Mortal Ledger: the inscribed dream (OP_RETURN <magic ++ ids>) is likewise exempt from the
+    // size/weight limits, capped at MAX_DREAM_BYTES (so it cannot bloat a block), at most one
+    // per block. The dream is data, not consensus — its CONTENT is never validated here; only
+    // its count and size are bounded. The exempt byte count is the pushed payload (ids + magic).
+    const std::vector<std::vector<unsigned char>> dream_ins = ExtractDreamInscriptions(block);
+    if (dream_ins.size() > 1)
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-dream-multi", "more than one dream inscription");
+    const uint64_t dream_exempt = dream_ins.empty() ? 0 : (uint64_t)dream_ins[0].size() + sizeof(MORTAL_DREAM_MAGIC);
+    if (dream_exempt > MAX_DREAM_BYTES)
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-dream-size", "dream inscription exceeds MAX_DREAM_BYTES");
 
     // Size limits
     if (block.vtx.empty() || block.vtx.size() * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT ||
-        (uint64_t)::GetSerializeSize(TX_NO_WITNESS(block)) * WITNESS_SCALE_FACTOR > (uint64_t)MAX_BLOCK_WEIGHT + canon_exempt * WITNESS_SCALE_FACTOR)
+        (uint64_t)::GetSerializeSize(TX_NO_WITNESS(block)) * WITNESS_SCALE_FACTOR > (uint64_t)MAX_BLOCK_WEIGHT + (novel_exempt + dream_exempt) * WITNESS_SCALE_FACTOR)
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-length", "size limits failed");
 
     // First transaction must be coinbase, the rest must not be
@@ -4231,9 +4242,9 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-diffbits", "incorrect proof of work");
 
     // Mortal Ledger: Proof of Quotation is enforced in ConnectBlock, not here. The
-    // quotation slice can depend on a successor novel registered in the coinbase
+    // quotation slice can depend on a next novel registered in the coinbase
     // (OP_SOURCE succession), which a header-only check cannot read. ConnectBlock
-    // has the full block and the canon state, so the check lives there.
+    // has the full block and the novel state, so the check lives there.
 
     // Check timestamp against prev
     if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast())
@@ -4323,15 +4334,15 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     // large by filling up the coinbase witness, which doesn't change
     // the block hash, so we couldn't mark the block as permanently
     // failed).
-    // Mortal Ledger: raise the weight ceiling by the canon registration's bytes (the
+    // Mortal Ledger: raise the weight ceiling by the novel registration's bytes (the
     // OP_SOURCE output, capped at MAX_NOVEL_BYTES), so a seam block carrying a whole novel
     // is within limits. Non-seam blocks (no registration) keep the normal ceiling.
-    uint64_t canon_exempt = 0;
+    uint64_t novel_exempt = 0;
     {
-        const auto regs = ExtractCanonRegistrations(block);
-        if (!regs.empty()) canon_exempt = std::min<uint64_t>(regs[0].size(), MAX_NOVEL_BYTES);
+        const auto regs = ExtractNovelRegistrations(block);
+        if (!regs.empty()) novel_exempt = std::min<uint64_t>(regs[0].size(), MAX_NOVEL_BYTES);
     }
-    if ((uint64_t)GetBlockWeight(block) > (uint64_t)MAX_BLOCK_WEIGHT + canon_exempt * WITNESS_SCALE_FACTOR) {
+    if ((uint64_t)GetBlockWeight(block) > (uint64_t)MAX_BLOCK_WEIGHT + novel_exempt * WITNESS_SCALE_FACTOR) {
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-weight", strprintf("%s : weight limit failed", __func__));
     }
 

@@ -16,6 +16,8 @@
 #include <consensus/validation.h>
 #include <deploymentstatus.h>
 #include <logging.h>
+#include <mortaldream.h>
+#include <mortalllm.h>
 #include <node/context.h>
 #include <node/kernel_notifications.h>
 #include <policy/feerate.h>
@@ -33,20 +35,25 @@
 
 namespace node {
 
-// Mortal Ledger: the local successor magazine (see node/miner.h). Process-global mining
+// Mortal Ledger: the local next novel magazine (see node/miner.h). Process-global mining
 // policy, set once at startup and read when assembling a seam block. Not consensus.
-static std::vector<std::vector<unsigned char>> g_mortal_successors;
-void MortalLoadSuccessors(std::vector<std::vector<unsigned char>> successors) { g_mortal_successors = std::move(successors); }
-std::vector<std::vector<unsigned char>> MortalSuccessors() { return g_mortal_successors; }
-std::vector<unsigned char> MortalNextSuccessor(uint32_t novel_index)
+static std::vector<std::vector<unsigned char>> g_mortal_next_novels;
+void MortalLoadNextNovels(std::vector<std::vector<unsigned char>> next_novels) { g_mortal_next_novels = std::move(next_novels); }
+std::vector<std::vector<unsigned char>> MortalNextNovels() { return g_mortal_next_novels; }
+std::vector<unsigned char> MortalNextNovel(uint32_t novel_index)
 {
-    return novel_index < g_mortal_successors.size() ? g_mortal_successors[novel_index] : std::vector<unsigned char>{};
+    return novel_index < g_mortal_next_novels.size() ? g_mortal_next_novels[novel_index] : std::vector<unsigned char>{};
 }
 
 // Mortal Ledger: the genesis novel this node delivers when mining the fork-height block H.
 static std::vector<unsigned char> g_mortal_genesis;
 void MortalLoadGenesis(std::vector<unsigned char> novel) { g_mortal_genesis = std::move(novel); }
 std::vector<unsigned char> MortalGenesisNovel() { return g_mortal_genesis; }
+
+// Mortal Ledger: hard cap on an inscribed dream's length in tokens (it usually stops earlier
+// at EOS). Process-global mining knob (-mortaldreammaxnew), not consensus — the dream is data.
+static int g_mortal_dream_max_new = MORTAL_DREAM_MAX_NEW;
+void MortalSetDreamMaxNew(int n) { g_mortal_dream_max_new = n > 0 ? n : 0; }
 
 int64_t GetMinimumTime(const CBlockIndex* pindexPrev, const int64_t difficulty_adjustment_interval)
 {
@@ -191,32 +198,57 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
     // Mortal Ledger: OP_SOURCE registration + 写字本位 issuance. The genesis novel is
     // delivered on-chain at the fork height H (from this node's -mortalgenesis config);
-    // afterwards, at each successor seam the miner names the next novel from its magazine.
+    // afterwards, at each next novel seam the miner names the next novel from its magazine.
     // Either rides an unspendable OP_SOURCE coinbase output, and the coinbase mints exactly
-    // the bytes this block transcribes (CanonIssuance). The entering canon state carries the
+    // the bytes this block transcribes (NovelIssuance). The entering novel state carries the
     // novel ordinal so the magazine advances across successive seams.
     const Consensus::Params& consensus = chainparams.GetConsensus();
-    const CanonState canon_in = CanonEnter(nHeight,
-        CanonState{pindexPrev->m_canon_source_height, pindexPrev->m_canon_offset, pindexPrev->m_canon_index},
+    const NovelState novel_in = NovelEnter(nHeight,
+        NovelState{pindexPrev->m_novel_source_height, pindexPrev->m_novel_offset, pindexPrev->m_novel_index},
         consensus);
-    std::vector<unsigned char> reg, canon_novel;
-    if (canon_in.active()) {
+    std::vector<unsigned char> reg, novel_bytes;
+    if (novel_in.active()) {
         if (nHeight == consensus.nMortalLedgerHeight) {
             // Genesis seam: deliver the pinned genesis novel (consensus checks its hash).
-            canon_novel = MortalGenesisNovel();
-            reg = canon_novel;
+            novel_bytes = MortalGenesisNovel();
+            reg = novel_bytes;
         } else {
-            canon_novel = ResolveCanonNovel(canon_in, pindexPrev, consensus, m_chainstate.m_blockman);
-            if (CanonExpectedSlice(canon_in, canon_novel, {}).empty()) {
-                // Successor seam: open choice, the next magazine entry by novel ordinal. Empty
+            novel_bytes = ResolveNovel(novel_in, pindexPrev, consensus, m_chainstate.m_blockman);
+            if (NovelExpectedSlice(novel_in, novel_bytes, {}).empty()) {
+                // Next novel seam: open choice, the next magazine entry by novel ordinal. Empty
                 // magazine -> no registration -> the chain starves (completion = death).
-                reg = MortalNextSuccessor(canon_in.index);
+                reg = MortalNextNovel(novel_in.index);
             }
         }
         if (!reg.empty()) coinbaseTx.vout.emplace_back(CAmount{0}, CScript() << OP_SOURCE << reg);
+
+        // Mortal Ledger: inscribe a dream once per 12-words-worth of transcription (a
+        // MORTAL_DREAM_SEGMENT_BYTES boundary), not every block — so the ledger carves several
+        // characters quickly, then pauses to dream: a rhythm. The dream's 12 words + seed come
+        // from the PARENT hash (a pure function of the already-fixed parent → no circular hash
+        // dependency; and it varies per chain, so the same novel dreams differently on different
+        // chains). Non-consensus for now: written to an unspendable OP_RETURN coinbase output so
+        // every node holds it as text. Only a model-having miner can dream.
+        if (MortalModelLoaded() && g_mortal_dream_max_new > 0) {
+            const std::vector<unsigned char> slice = NovelExpectedSlice(novel_in, novel_bytes, reg);
+            uint64_t eff_off = novel_in.offset;
+            if (eff_off >= novel_bytes.size() && !reg.empty()) eff_off = 0; // successor seam: the new novel starts at 0
+            const uint64_t leaving = eff_off + slice.size();
+            const bool dream_now = (leaving / MORTAL_DREAM_SEGMENT_BYTES) > (eff_off / MORTAL_DREAM_SEGMENT_BYTES);
+            if (dream_now) {
+                const uint256 parent = pindexPrev->GetBlockHash();
+                const std::vector<int> dream = MortalBlockDream(parent, parent, g_mortal_dream_max_new);
+                // Detokenize to UTF-8 text in pure C++ (the .mlm's vocab), bounded to MAX_DREAM_BYTES
+                // on a character boundary, and inscribe the readable dream itself.
+                const std::string text = dream.empty() ? std::string()
+                    : MortalDetokenize(dream, MAX_DREAM_BYTES - sizeof(MORTAL_DREAM_MAGIC));
+                if (!text.empty())
+                    coinbaseTx.vout.emplace_back(CAmount{0}, MakeDreamInscription(std::vector<unsigned char>(text.begin(), text.end())));
+            }
+        }
     }
-    const CAmount block_reward{nFees + (canon_in.active()
-        ? CanonIssuance(canon_in, canon_novel, reg)
+    const CAmount block_reward{nFees + (novel_in.active()
+        ? NovelIssuance(novel_in, novel_bytes, reg)
         : GetBlockSubsidy(nHeight, consensus))};
     coinbaseTx.vout[0].nValue = block_reward;
     coinbase_tx.block_reward_remaining = block_reward;

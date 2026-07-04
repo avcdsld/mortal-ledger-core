@@ -249,31 +249,45 @@ bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Par
 // byte (hash.begin()[0]); the proof-of-work magnitude lives in the high bytes,
 // so the two predicates do not collide. Heights map to byte offsets, so the
 // chain's head bytes, read in order, reproduce the novel exactly. (Demo: a fixed
-// opening with k=1 byte/block; the full version reads the offset from canon
+// opening with k=1 byte/block; the full version reads the offset from novel
 // state and carves k bytes.)
-// ---- Mortal Ledger canon state + OP_SOURCE succession ----
-// Reorg-/reindex-safe: the canon state is a PURE fold over ancestors, carried on the
-// block index (CBlockIndex::m_canon_*; see chain.h), not in process globals. A reorg
+// ---- Mortal Ledger novel state + OP_SOURCE succession ----
+// Reorg-/reindex-safe: the novel state is a PURE fold over ancestors, carried on the
+// block index (CBlockIndex::m_novel_*; see chain.h), not in process globals. A reorg
 // restores the state from the parent (nothing to undo); a restart reloads it from disk.
 // The functions here are pure — the node resolves the active novel's bytes (the genesis
 // constant, or the source block's coinbase) and passes them in.
-static const int CANON_K = 1; // writing granularity (demo; calibrated on the Pi)
+// Mortal Ledger: the transcription unit is ONE CHARACTER, not one byte — the chain writes a
+// whole character each block, and each character's Proof-of-Quotation work is proportional to
+// its byte length (k). k = the UTF-8 byte length of the character at `off` (1..4): a 3-byte
+// kanji costs ~2^24 grinds, a 1-byte newline ~2^8. So heavier characters take more work — the
+// labour of writing a character is the character itself — while the LWMA pace tunes the average
+// block time on top. Defensive fallback of 1 for a non-lead byte (a well-formed novel is valid
+// UTF-8). Empty text past the end => 0 (nothing to transcribe; the chain starves at completion).
+static const int MAX_QUOTATION_K = 4; // the longest UTF-8 character (bytes the pace check zeros)
+static size_t NovelSliceLen(const std::vector<unsigned char>& text, size_t off)
+{
+    if (off >= text.size()) return 0;
+    const unsigned char c = text[off];
+    const size_t k = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xe ? 3 : (c >> 3) == 0x1e ? 4 : 1;
+    return std::min(k, text.size() - off);
+}
 
-// The canon state ENTERING the block at `height`, given its parent's leaving state.
+// The novel state ENTERING the block at `height`, given its parent's leaving state.
 // Below H: inactive (pre-fork is inherited Bitcoin). At H: the genesis novel begins.
 // Above H: inherit the parent's leaving state. Gated only by the fork height.
-CanonState CanonEnter(int height, const CanonState& parent_after, const Consensus::Params& params)
+NovelState NovelEnter(int height, const NovelState& parent_after, const Consensus::Params& params)
 {
-    if (!params.IsMortalLedgerActive(height)) return CanonState{};          // pre-fork: no canon
-    if (height == params.nMortalLedgerHeight) return CanonState{height, 0}; // the genesis novel begins
+    if (!params.IsMortalLedgerActive(height)) return NovelState{};          // pre-fork: no novel
+    if (height == params.nMortalLedgerHeight) return NovelState{height, 0}; // the genesis novel begins
     return parent_after;                                                    // inherit from the parent
 }
 
 // The K bytes the next block must carry, given the entering state, the active novel's
-// bytes `novel` (resolved from in.source_height) and any successor `reg` registered in
+// bytes `novel` (resolved from in.source_height) and any next novel `reg` registered in
 // THIS block. When the active novel is exhausted the slice is read from reg; with
 // neither, the result is empty (the chain starves at completion).
-std::vector<unsigned char> CanonExpectedSlice(const CanonState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg)
+std::vector<unsigned char> NovelExpectedSlice(const NovelState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg)
 {
     if (!in.active()) return {};
     const std::vector<unsigned char>* text = &novel;
@@ -283,26 +297,30 @@ std::vector<unsigned char> CanonExpectedSlice(const CanonState& in, const std::v
         text = &reg;
         off = 0;
     }
-    const size_t n = std::min((size_t)CANON_K, text->size() - off);
+    const size_t n = NovelSliceLen(*text, off);   // one whole character
     return std::vector<unsigned char>(text->begin() + off, text->begin() + off + n);
 }
 
-// The canon state LEAVING the block at `height`, given the entering state, the active
+// The novel state LEAVING the block at `height`, given the entering state, the active
 // novel's bytes and the block's registration. At the seam where the active novel ends,
-// a registered successor becomes the active novel — installed by THIS block
+// a registered next novel becomes the active novel — installed by THIS block
 // (source_height = height) with the offset restarted. Gating the switch on actual
 // exhaustion (offset >= novel.size()) means an early registration cannot hijack the
-// canon. Pure; no globals.
-CanonState CanonNext(const CanonState& in, const std::vector<unsigned char>& novel, int height, const std::vector<unsigned char>& reg)
+// novel. Pure; no globals.
+NovelState NovelNext(const NovelState& in, const std::vector<unsigned char>& novel, int height, const std::vector<unsigned char>& reg)
 {
-    if (!in.active()) return CanonState{};
-    CanonState out = in;
+    if (!in.active()) return NovelState{};
+    NovelState out = in;
+    const std::vector<unsigned char>* text = &novel;
+    size_t off = in.offset;
     if (in.offset >= novel.size() && !reg.empty()) {
         out.source_height = height;
         out.offset = 0;
         out.index = in.index + 1;   // a new novel begins: advance the ordinal
+        text = &reg;
+        off = 0;
     }
-    out.offset += CANON_K;
+    out.offset += NovelSliceLen(*text, off);   // advance by one whole character
     return out;
 }
 
@@ -317,14 +335,14 @@ bool HashCarriesSlice(const uint256& hash, const std::vector<unsigned char>& sli
     return true;
 }
 
-// OP_SOURCE succession (production): the successor novel is carried in an unspendable
+// OP_SOURCE succession (production): the next novel is carried in an unspendable
 // coinbase output whose scriptPubKey is `OP_SOURCE <novel>`. This lifts the coinbase
 // scriptSig 100-byte limit (the earlier demo encoding); the novel may be up to
 // MAX_NOVEL_BYTES and the seam block is granted a matching weight/size exemption. The
 // novel is a single push (so it is skipped by sig-op counting and never executed, the
 // output being unspendable). Returns each registration's bytes (normally 0 or 1; >1 is
 // rejected by block validation).
-std::vector<std::vector<unsigned char>> ExtractCanonRegistrations(const CBlock& block)
+std::vector<std::vector<unsigned char>> ExtractNovelRegistrations(const CBlock& block)
 {
     std::vector<std::vector<unsigned char>> regs;
     if (block.vtx.empty()) return regs;
@@ -342,36 +360,76 @@ std::vector<std::vector<unsigned char>> ExtractCanonRegistrations(const CBlock& 
     return regs;
 }
 
-// The single canon registration in this block (empty if none).
-std::vector<unsigned char> ExtractCanonRegistration(const CBlock& block)
+// The single novel registration in this block (empty if none).
+std::vector<unsigned char> ExtractNovelRegistration(const CBlock& block)
 {
-    const auto regs = ExtractCanonRegistrations(block);
+    const auto regs = ExtractNovelRegistrations(block);
     return regs.empty() ? std::vector<unsigned char>{} : regs.front();
+}
+
+// Mortal Ledger: dream inscription (production). A block's dream rides an unspendable
+// OP_RETURN coinbase output: OP_RETURN <MORTAL_DREAM_MAGIC ++ token-ids>. OP_RETURN (not
+// OP_DREAM, a functional opcode) keeps the output provably unspendable and never executes the
+// seed-dependent voice during validation. The dream is data, NOT consensus.
+bool IsDreamInscription(const CScript& s, std::vector<unsigned char>* token_bytes)
+{
+    if (s.empty() || s[0] != OP_RETURN) return false;
+    CScript::const_iterator pc = s.begin();
+    opcodetype op;
+    std::vector<unsigned char> data;
+    if (!s.GetOp(pc, op, data)) return false;       // consume OP_RETURN
+    data.clear();
+    if (!s.GetOp(pc, op, data)) return false;        // the pushed payload
+    if (data.size() < sizeof(MORTAL_DREAM_MAGIC)) return false;
+    for (size_t i = 0; i < sizeof(MORTAL_DREAM_MAGIC); i++)
+        if (data[i] != MORTAL_DREAM_MAGIC[i]) return false;
+    if (token_bytes) token_bytes->assign(data.begin() + sizeof(MORTAL_DREAM_MAGIC), data.end());
+    return true;
+}
+
+// Each dream's token bytes (magic stripped). Normally 0 or 1; >1 is rejected by validation.
+std::vector<std::vector<unsigned char>> ExtractDreamInscriptions(const CBlock& block)
+{
+    std::vector<std::vector<unsigned char>> dreams;
+    if (block.vtx.empty()) return dreams;
+    for (const CTxOut& o : block.vtx[0]->vout) {
+        std::vector<unsigned char> tb;
+        if (IsDreamInscription(o.scriptPubKey, &tb)) dreams.push_back(std::move(tb));
+    }
+    return dreams;
+}
+
+CScript MakeDreamInscription(const std::vector<unsigned char>& token_bytes)
+{
+    std::vector<unsigned char> payload(MORTAL_DREAM_MAGIC, MORTAL_DREAM_MAGIC + sizeof(MORTAL_DREAM_MAGIC));
+    payload.insert(payload.end(), token_bytes.begin(), token_bytes.end());
+    return CScript() << OP_RETURN << payload;
 }
 
 // 写字本位 (transcription standard): the coinbase mints BAB equal to the bytes
 // actually transcribed this block (rate: 1 BAB per byte). That is the length of
-// the slice this block carries, given the successor registration reg. At the
+// the slice this block carries, given the next novel registration reg. At the
 // writing granularity k this is k BAB per block, less on a novel's final partial
-// block, and zero once the canon is exhausted with no successor (death = no
+// block, and zero once the novel is exhausted with no next novel (death = no
 // issuance). Supply is thus bounded by the text's length and grows only with
 // transcription. The literary unit (the book's bytes) and the coin (BAB) are
 // different units; we do not force them equal, the amount only scales with the
 // count.
-CAmount CanonIssuance(const CanonState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg)
+CAmount NovelIssuance(const NovelState& in, const std::vector<unsigned char>& novel, const std::vector<unsigned char>& reg)
 {
-    return (CAmount)CanonExpectedSlice(in, novel, reg).size() * COIN;
+    return (CAmount)NovelExpectedSlice(in, novel, reg).size() * COIN;
 }
 
-// Mortal Ledger: the pace half of Proof of Quotation. The quotation half binds the
-// LOW k internal bytes of the hash (the next bytes of the novel); the pace half
-// binds the MAGNITUDE. We zero the quotation bytes before the magnitude comparison
-// so the two predicates are exactly orthogonal: the expected work to mine a block is
-// ≈ 2^(8k) (find the quotation bytes) × (2^256 / target) (meet the pace). The target
-// moves every block via LWMA. At k=1 the zeroed byte shifts the 256-bit magnitude by
-// < 256, so this equals CheckProofOfWork in practice; zeroing makes the split exact.
+// Mortal Ledger: the pace half of Proof of Quotation. The quotation half binds the LOW k
+// internal bytes of the hash (the next character's bytes); the pace half binds the MAGNITUDE.
+// We zero the low quotation bytes before the magnitude comparison so the two predicates are
+// orthogonal: the work to mine a block is ≈ 2^(8k) (find the character's bytes) × (2^256/target)
+// (meet the pace). This is a context-free header check, so it can't know k (which depends on the
+// novel offset) — it zeros the fixed maximum (MAX_QUOTATION_K = 4). Zeroing up to 4 low bytes
+// shifts the 256-bit magnitude by < 2^32, negligible against any real target, so the pace and
+// quotation stay independent regardless of the actual character length.
 bool CheckPaceTarget(uint256 hash, unsigned int nBits, const Consensus::Params& params)
 {
-    for (int i = 0; i < CANON_K; i++) hash.begin()[i] = 0;
+    for (int i = 0; i < MAX_QUOTATION_K; i++) hash.begin()[i] = 0;
     return CheckProofOfWorkImpl(hash, nBits, params);
 }

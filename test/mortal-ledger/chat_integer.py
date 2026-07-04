@@ -62,11 +62,12 @@ def main():
     ap.add_argument("--max-new", type=int, default=256,
                     help="hard cap on generated tokens; generation stops earlier at <|im_end|>")
     ap.add_argument("--dream", help="space-separated words (e.g. the mined 12) to dream from")
-    # The framing instruction for --dream. This is the candidate OP_DREAM template — the
-    # text that would be pinned into consensus once chosen. Experiment with it here.
+    # The framing instruction for --dream. This default is the one PINNED into the node's dream
+    # inscription (src/mortal_dream_prompt.h, via gen_dream_prompt.py); keep it in sync to
+    # preview exactly what the node inscribes. Override it to experiment with alternatives.
     ap.add_argument("--instruction",
-                    default="次の言葉をあなたに渡します。ここから想像して、日本語で短い夢の日記を書いてください",
-                    help="framing instruction for --dream (the candidate OP_DREAM template)")
+                    default="夢で見た情景を数行で描写して。タイトルや前置きは無く本文のみ。手がかりの言葉:",
+                    help="framing instruction for --dream (default = the node's pinned template)")
     ap.add_argument("--system", default="", help="optional system prompt")
     ap.add_argument("--think", action="store_true",
                     help="show the model's <think> reasoning (Qwen3 thinking mode; much longer/slower)")
@@ -103,7 +104,7 @@ def main():
 
     def run_chat(messages):
         ids = list(apply_template(messages))
-        print("  (generating — integer forward, temp 0, slow)", flush=True)
+        print(f"  (prompt {len(ids)} tokens — generating, integer forward, temp 0, slow)", flush=True)
         gen = []
         shown = ""  # text already emitted, for clean append-streaming of multi-byte chars
 
@@ -128,12 +129,13 @@ def main():
             sys.stdout.flush()
         print()
         if gen:
-            print(f"  [ {len(gen)} tokens in {dt:.1f}s | {len(gen) / dt:.2f} tok/s ]")
+            print(f"  [ prompt {len(ids)} + generated {len(gen)} tokens in {dt:.1f}s "
+                  f"(prompt fill + generation) | {len(gen) / dt:.2f} tok/s ]")
         return full
 
     if args.dream:
         words = args.dream.split()
-        prompt = args.instruction + "：" + "、".join(words)
+        prompt = args.instruction + "、".join(words)  # the pinned instruction already ends ":"
         run_chat(([{"role": "system", "content": args.system}] if args.system else [])
                  + [{"role": "user", "content": prompt}])
         return

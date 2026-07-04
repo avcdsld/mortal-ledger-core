@@ -84,7 +84,7 @@ enum BlockStatus : uint32_t {
     BLOCK_STATUS_RESERVED    =   256, //!< Unused flag that was previously set on assumeutxo snapshot blocks and their
                                       //!< ancestors before they were validated, and unset when they were validated.
 
-    BLOCK_CANON              =   512, //!< Mortal Ledger: this block carries active canon state (m_canon_*), persisted below.
+    BLOCK_NOVEL              =   512, //!< Mortal Ledger: this block carries active novel state (m_novel_*), persisted below.
 };
 
 /** The block chain is a tree shaped structure starting with the
@@ -153,22 +153,22 @@ public:
     //! (memory only) Maximum nTime in the chain up to and including this block.
     unsigned int nTimeMax{0};
 
-    //! Mortal Ledger canon state LEAVING this block (after it connects): which novel is
-    //! being transcribed, identified by m_canon_source_height (the height of the block
+    //! Mortal Ledger novel state LEAVING this block (after it connects): which novel is
+    //! being transcribed, identified by m_novel_source_height (the height of the block
     //! that installed it; == Consensus::Params::nMortalLedgerHeight for the genesis
-    //! novel; -1 = inactive / pre-fork), and m_canon_offset, the bytes transcribed so
+    //! novel; -1 = inactive / pre-fork), and m_novel_offset, the bytes transcribed so
     //! far. A pure fold over ancestors: computed once in ConnectBlock from pprev,
     //! restored from pprev (not undone) on a reorg, and serialized in CDiskBlockIndex
     //! so a restart/reindex recomputes it identically. Stored by source-height, not by
     //! bytes, to keep the index small; the bytes are resolved on demand from the
     //! genesis constant or the source block's coinbase.
-    int m_canon_source_height{-1};
-    uint64_t m_canon_offset{0};
+    int m_novel_source_height{-1};
+    uint64_t m_novel_offset{0};
     //! Mortal Ledger: novel ordinal (0 = genesis; +1 at each seam). Selects which entry
-    //! of the node's local successor magazine the miner registers at a seam. A pure fold
-    //! like the rest of the canon state; informational for mining policy (consensus
+    //! of the node's local next novel magazine the miner registers at a seam. A pure fold
+    //! like the rest of the novel state; informational for mining policy (consensus
     //! validates via source_height/offset/registration, not this).
-    uint32_t m_canon_index{0};
+    uint32_t m_novel_index{0};
 
     explicit CBlockIndex(const CBlockHeader& block)
         : nVersion{block.nVersion},
@@ -377,14 +377,14 @@ public:
         READWRITE(obj.nBits);
         READWRITE(obj.nNonce);
 
-        // Mortal Ledger: persist the per-block canon state so a restart/reindex
+        // Mortal Ledger: persist the per-block novel state so a restart/reindex
         // recomputes the transcription fold identically instead of replaying it.
-        // Present only when the block carries active canon (BLOCK_CANON), so pre-fork
+        // Present only when the block carries active novel (BLOCK_NOVEL), so pre-fork
         // blocks cost nothing; source_height is then >= 0 (NONNEGATIVE_SIGNED).
-        if (obj.nStatus & BLOCK_CANON) {
-            READWRITE(VARINT_MODE(obj.m_canon_source_height, VarIntMode::NONNEGATIVE_SIGNED));
-            READWRITE(VARINT(obj.m_canon_offset));
-            READWRITE(VARINT(obj.m_canon_index));
+        if (obj.nStatus & BLOCK_NOVEL) {
+            READWRITE(VARINT_MODE(obj.m_novel_source_height, VarIntMode::NONNEGATIVE_SIGNED));
+            READWRITE(VARINT(obj.m_novel_offset));
+            READWRITE(VARINT(obj.m_novel_index));
         }
     }
 
@@ -441,7 +441,7 @@ public:
         return (*this)[pindex->nHeight] == pindex;
     }
 
-    /** Find the successor of a block in this chain, or nullptr if the given index is not found or is the tip. */
+    /** Find the next novel of a block in this chain, or nullptr if the given index is not found or is the tip. */
     CBlockIndex* Next(const CBlockIndex* pindex) const
     {
         if (Contains(pindex))

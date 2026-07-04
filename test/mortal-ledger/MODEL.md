@@ -33,8 +33,21 @@ g++ -O2 -std=c++17 -I "$(brew --prefix openssl)/include" test/mortal-ledger/gguf
 ./gguf Qwen3-1.7B-Q8_0.gguf qwen3-1.7b.mlm
 ```
 
-- Canonical `.mlm` SHA-256 (pin): `804b39e0f63ed788692052244ea4563a76389c6257ea3380d0ca92e4861ea8b7`
-- Size ~1726.8 MB. Reproducible: same input → byte-identical `.mlm` across `-O0`/`-O2`.
+- Canonical `.mlm` SHA-256 (pin): `f15557797f9d1323a66ed6bca269ecb72a38e6ef1003d0e2050dbcb84f9eb46c`
+- Size ~1728.1 MB. Reproducible: same input → byte-identical `.mlm` across `-O0`/`-O2`.
+
+### Detokenizer vocab (`VOC1` section)
+
+After the tensors, the `.mlm` carries an optional **`VOC1`** section: the tokenizer's
+`id → raw bytes` map (151,936 tokens, ~1 MB), read by `gguf_convert.cpp` straight from the
+GGUF's embedded tokenizer (`tokenizer.ggml.tokens` + `token_type`, byte-level/GPT-2 decoded;
+CONTROL/USER_DEFINED tokens → empty). This is the "tokenizer travels with the model" approach
+(like llama.cpp). The node loads it and turns a dream's token ids back into UTF-8 **in pure
+C++** (`MortalDetokenize`) — detokenization is a flat lookup, unlike the BPE *tokenization*
+that the prompt tables (`src/mortal_dream_prompt.h`) pin for the input side. Layout: `"VOC1"`,
+`u64 count`, then per token `u16 len` + `len` bytes. A model with no section (the toy test
+`.mlm`) simply has no vocab. The weights before `VOC1` are byte-identical to the pre-vocab
+`.mlm` (`804b39e0…`), so inference is unchanged.
 
 ## Determinism (why integer)
 

@@ -1,14 +1,14 @@
 B="${BINDIR:-$PWD/build/bin}"
 DD=/tmp/btc/rtsucc
-A="旅への誘いが、次第に私の空想から消えて行つた。"   # genesis canon: 萩原朔太郎『猫町』
+A="Call me Ishmael. Some years ago, having little money, I went to sea."   # genesis canon: 萩原朔太郎『猫町』
 BNOVEL="Call me Ishmael."                              # successor the miner registers: Melville, Moby-Dick
 LA=$(python3 -c "print(len('$A'.encode('utf-8')))")
 LB=$(python3 -c "print(len('$BNOVEL'.encode('utf-8')))")
 echo "genesis canon A: $A  ($LA bytes)"
-echo "successor    B: $BNOVEL  ($LB bytes)  [loaded into the node successor magazine via -mortalsuccessor]"
+echo "successor    B: $BNOVEL  ($LB bytes)  [loaded into the node successor magazine via -mortalnextnovel]"
 pkill -f "bitcoind -regtest" 2>/dev/null
 rm -rf $DD; mkdir -p $DD
-"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="旅への誘いが、次第に私の空想から消えて行つた。" -fallbackfee=0.0001 -mortalsuccessor="$BNOVEL" -mortalsuccessor="And so the writing goes on."
+"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="Call me Ishmael. Some years ago, having little money, I went to sea." -fallbackfee=0.0001 -mortalnextnovel="$BNOVEL" -mortalnextnovel="And so the writing goes on."
 for _i in $(seq 1 60); do [ -f "$DD/regtest/.cookie" ] && break; sleep 0.5; done
 "$B/bitcoin-cli" -regtest -datadir=$DD -rpcwait createwallet t >/dev/null
 ADDR=$("$B/bitcoin-cli" -regtest -datadir=$DD getnewaddress)

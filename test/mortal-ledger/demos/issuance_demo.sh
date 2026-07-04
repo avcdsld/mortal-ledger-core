@@ -1,6 +1,6 @@
 B="${BINDIR:-$PWD/build/bin}"
 DD=/tmp/btc/rtissue
-A="旅への誘いが、次第に私の空想から消えて行つた。"   # genesis canon: 萩原朔太郎『猫町』
+A="Call me Ishmael. Some years ago, having little money, I went to sea."   # genesis canon: 萩原朔太郎『猫町』
 BNOVEL="Call me Ishmael."                              # successor: Melville, Moby-Dick
 LA=$(python3 -c "print(len('$A'.encode('utf-8')))")
 LB=$(python3 -c "print(len('$BNOVEL'.encode('utf-8')))")
@@ -9,7 +9,7 @@ echo "succ  B: $BNOVEL  ($LB bytes)"
 echo "rule: coinbase mints 1 BAB per byte transcribed (写字本位). supply should equal the letters written."
 pkill -f "bitcoind -regtest" 2>/dev/null
 rm -rf $DD; mkdir -p $DD
-"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="旅への誘いが、次第に私の空想から消えて行つた。" -mortalsuccessor="Call me Ishmael." -fallbackfee=0.0001
+"$B/bitcoind" -regtest -datadir=$DD -daemon -mortalgenesis="Call me Ishmael. Some years ago, having little money, I went to sea." -mortalnextnovel="Call me Ishmael." -fallbackfee=0.0001
 for _i in $(seq 1 60); do [ -f "$DD/regtest/.cookie" ] && break; sleep 0.5; done
 "$B/bitcoin-cli" -regtest -datadir=$DD -rpcwait createwallet t >/dev/null
 ADDR=$("$B/bitcoin-cli" -regtest -datadir=$DD getnewaddress)

@@ -8,6 +8,7 @@
 #include <consensus/consensus.h>
 #include <primitives/transaction.h>
 #include <consensus/validation.h>
+#include <pow.h>
 #include <script/script.h>
 
 #include <algorithm>
@@ -20,24 +21,30 @@ bool CheckTransaction(const CTransaction& tx, TxValidationState& state)
     if (tx.vout.empty())
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-vout-empty");
     // Mortal Ledger: a coinbase may carry a registered novel in an unspendable OP_SOURCE
-    // output (scriptPubKey = OP_SOURCE <novel>, up to MAX_NOVEL_BYTES). Those bytes are exempt
-    // from the per-transaction size limit, matching the seam block's size/weight exemption.
-    uint64_t canon_exempt = 0;
+    // output (scriptPubKey = OP_SOURCE <novel>, up to MAX_NOVEL_BYTES) and an inscribed dream
+    // in an unspendable OP_RETURN output (up to MAX_DREAM_BYTES). Those bytes are exempt from
+    // the per-transaction size limit, matching the block's size/weight exemption — a seam block
+    // can carry both a whole novel and a dream.
+    uint64_t novel_exempt = 0;
     if (tx.IsCoinBase()) {
+        uint64_t dream_exempt = 0;
         for (const auto& txout : tx.vout) {
             const CScript& s = txout.scriptPubKey;
+            std::vector<unsigned char> tb;
+            if (IsDreamInscription(s, &tb)) { dream_exempt += tb.size() + sizeof(MORTAL_DREAM_MAGIC); continue; }
             if (s.empty() || s[0] != OP_SOURCE) continue;
             CScript::const_iterator pc = s.begin();
             opcodetype op;
             std::vector<unsigned char> data;
             if (!s.GetOp(pc, op, data)) continue;            // OP_SOURCE
             data.clear();
-            if (s.GetOp(pc, op, data)) canon_exempt += data.size(); // the pushed novel
+            if (s.GetOp(pc, op, data)) novel_exempt += data.size(); // the pushed novel
         }
-        canon_exempt = std::min<uint64_t>(canon_exempt, MAX_NOVEL_BYTES);
+        novel_exempt = std::min<uint64_t>(novel_exempt, MAX_NOVEL_BYTES) +
+                       std::min<uint64_t>(dream_exempt, MAX_DREAM_BYTES);
     }
     // Size limits (this doesn't take the witness into account, as that hasn't been checked for malleability)
-    if ((uint64_t)::GetSerializeSize(TX_NO_WITNESS(tx)) * WITNESS_SCALE_FACTOR > (uint64_t)MAX_BLOCK_WEIGHT + canon_exempt * WITNESS_SCALE_FACTOR) {
+    if ((uint64_t)::GetSerializeSize(TX_NO_WITNESS(tx)) * WITNESS_SCALE_FACTOR > (uint64_t)MAX_BLOCK_WEIGHT + novel_exempt * WITNESS_SCALE_FACTOR) {
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-oversize");
     }
 

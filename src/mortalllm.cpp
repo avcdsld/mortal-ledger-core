@@ -42,6 +42,11 @@ using valtype = std::vector<unsigned char>;
 struct MTensor { std::vector<u64> dims; int mode = 0; std::vector<i8> q; std::vector<i64> scale; std::vector<i32> q16; };
 std::map<std::string, MTensor> g_w;
 
+// Detokenizer vocab: id -> raw bytes, carried in the .mlm's optional VOC1 section (see
+// test/mortal-ledger/gguf_convert.cpp). Lets the node turn a dream's token ids back into UTF-8
+// text in pure C++. Empty if the model has no vocab section (e.g. the toy test model).
+std::vector<std::string> g_vocab;
+
 // ---- hyperparameters, derived from the model at load ---------------------------
 int N_LAYER = 0, D = 0, N_HEAD = 0, N_KV = 0, HD = 0, FF = 0;
 u64 VOCAB = 0;
@@ -84,6 +89,19 @@ void load_mlm(const char* path) {
                 u64 nq = rd_u64(f); t.q16.resize(nq); if (nq) rd(t.q16.data(), 4, nq, f);
             }
             g_w[name] = std::move(t);
+        }
+        // Mortal Ledger: optional detokenizer vocab (id -> raw bytes), appended after the
+        // tensors. A model without it (toy test model) simply hits EOF here -> no vocab.
+        g_vocab.clear();
+        char vm[4];
+        if (std::fread(vm, 1, 4, f) == 4 && std::memcmp(vm, "VOC1", 4) == 0) {
+            u64 nv = rd_u64(f);
+            g_vocab.resize(nv);
+            for (u64 i = 0; i < nv; i++) {
+                uint16_t len; rd(&len, 2, 1, f);
+                g_vocab[i].resize(len);
+                if (len) rd(&g_vocab[i][0], 1, len, f);
+            }
         }
     } catch (...) { std::fclose(f); throw; }
     std::fclose(f);
@@ -286,6 +304,29 @@ std::vector<int> decode_tokens(const valtype& in) {
 }
 
 } // namespace
+
+bool MortalModelLoaded() { return !g_w.empty(); }
+
+std::string MortalDetokenize(const std::vector<int>& tokens, std::size_t max_bytes)
+{
+    std::string s;
+    for (int t : tokens) {
+        if (t < 0 || (size_t)t >= g_vocab.size()) continue;
+        const std::string& b = g_vocab[t];
+        if (max_bytes != SIZE_MAX && s.size() + b.size() > max_bytes) break; // keep a whole-token bound
+        s += b;
+    }
+    // Drop an incomplete trailing UTF-8 sequence: byte-level BPE can split a character across
+    // tokens, so a truncated (or byte-capped) dream may end mid-character.
+    size_t i = s.size();
+    while (i > 0 && ((unsigned char)s[i - 1] & 0xC0) == 0x80) i--; // back over continuation bytes
+    if (i > 0) {
+        const unsigned char lead = (unsigned char)s[i - 1];
+        const size_t need = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+        if (s.size() - (i - 1) < need) s.resize(i - 1);
+    }
+    return s;
+}
 
 void MortalInstallLLM(const std::string& path, const std::string& expected_sha256_hex)
 {
